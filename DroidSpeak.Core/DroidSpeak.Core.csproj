@@ -1,0 +1,21 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+	<PropertyGroup>
+		<TargetFramework>net10.0</TargetFramework>
+		<IsAotCompatible>true</IsAotCompatible>
+		<EnableTrimAnalyzer>true</EnableTrimAnalyzer>
+		<RootNamespace>DroidSpeak</RootNamespace>
+		<AssemblyName>DroidSpeak.Core</AssemblyName>
+
+		<PackageId>DroidSpeak.Core</PackageId>
+		<Description>Zero-dependency, NativeAOT-compatible C# library for procedural synthesis of expressive astromech-style droid speech and acoustic steganography.</Description>
+		<PackageTags>audio;dsp;synth;tts;droid;r2d2;fsk;modem;procedural;gamedev</PackageTags>
+		<PackageLicenseExpression>MIT</PackageLicenseExpression>
+		<PackageReadmeFile>README.md</PackageReadmeFile>
+	</PropertyGroup>
+
+	<ItemGroup>
+		<None Include="..\README.md" Pack="true" PackagePath="\" Condition="Exists('..\README.md')" />
+	</ItemGroup>
+
+</Project>
