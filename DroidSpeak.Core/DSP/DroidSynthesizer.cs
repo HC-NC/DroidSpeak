@@ -990,6 +990,12 @@ public sealed class DroidSynthesizer
                 low += (f * 0.5f) * band;
             }
 
+            if (MathF.Abs(low) < 1e-7f && absIn == 0f)
+            {
+                low = 0f;
+                band = 0f;
+            }
+
             buffer[i] = low;
         }
     }

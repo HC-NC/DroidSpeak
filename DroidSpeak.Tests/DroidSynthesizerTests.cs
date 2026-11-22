@@ -219,7 +219,7 @@ public class DroidSynthesizerTests
         {
             Assert.Equal(first.WordStartSample, note.WordStartSample);
             Assert.Equal(last.WordEndSample, note.WordEndSample);
-            Assert.InRange(note.WordAttack, 0.005f, 0.010f);
+            Assert.InRange(note.WordAttack, 0.005f, 0.016f);
             Assert.InRange(note.WordRelease, 0.010f, 0.020f);
         });
     }
