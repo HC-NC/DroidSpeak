@@ -1,9 +1,11 @@
 # DroidSpeak
 
-[![.NET](https://shields.io)](https://microsoft.com)
-[![License: MIT](https://shields.io)](LICENSE)
-[![Zero Dependencies](https://shields.io)](#features)
-[![AOT Compatible](https://shields.io)](#features)
+[![GitHub Actions Workflow Status](https://img.shields.io/github/actions/workflow/status/HC-NC/DroidSpeak/release.yml)](https://github.com/HC-NC/DroidSpeak/actions)
+[![GitHub Release](https://img.shields.io/github/v/release/HC-NC/DroidSpeak)](https://github.com/HC-NC/DroidSpeak/releases/latest)
+[![MIT License](https://img.shields.io/github/license/HC-NC/DroidSpeak)](LICENSE)
+[![GitHub code size in bytes](https://img.shields.io/github/languages/code-size/HC-NC/DroidSpeak)](#project-structure)
+[![.NET](https://img.shields.io/badge/.NET-10.0-512BD4)](https://dotnet.microsoft.com)
+[![AOT Compatible](https://img.shields.io/badge/NativeAOT-Compatible-blue)](#features)
 
 **Text-to-Beep Engine** — a zero-dependency, NativeAOT-compatible C# library (.NET 10) for procedural synthesis of expressive, astromech-style droid speech from arbitrary text, complete with voice profiles and an acoustic steganography modem.
 
