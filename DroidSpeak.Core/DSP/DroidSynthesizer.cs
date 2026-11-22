@@ -392,7 +392,7 @@ public sealed class DroidSynthesizer
         var duration = Math.Max(1, wordEndSample - wordStartSample) / (float)_sampleRate;
 
         // Attack only on the first syllable, release only on the last one.
-        var attack = Math.Clamp(duration * 0.12f, 0.005f, 0.010f);
+        var attack = Math.Clamp(duration * 0.14f, 0.009f, 0.016f);
         var decay = Math.Clamp(duration * 0.20f, 0.010f, 0.030f);
         var release = Math.Clamp(duration * 0.22f, 0.010f, 0.020f);
         const float sustain = 0.74f;
@@ -692,6 +692,7 @@ public sealed class DroidSynthesizer
             RenderChatter(chatter, buffer.Slice(chatter.StartSample, count));
         }
 
+        ApplyDynamicLowPassFilter(buffer, profile);
         ApplyPeakCeiling(buffer);
     }
 
@@ -712,6 +713,7 @@ public sealed class DroidSynthesizer
         {
             var noteTime = n / (float)_sampleRate;
             var absoluteTime = (note.StartSample + n) / (float)_sampleRate;
+            var timeInWord = (note.StartSample + n - note.WordStartSample) / (float)_sampleRate;
             var position = n / (float)lastSample;
 
             // Smoothstep makes the glide ease in and out instead of sounding like a ramp.
@@ -720,10 +722,20 @@ public sealed class DroidSynthesizer
             // Pitch is perceived logarithmically, so glide exponentially between frequencies.
             var frequency = note.StartFrequency * MathF.Pow(frequencyRatio, curveT);
 
+            // 1. Smooth bell-shaped whistle transient (starts and ends at 0, zero phase/freq click)
+            if (timeInWord < 0.022f)
+            {
+                var scoopPhase = timeInWord / 0.022f;
+                var direction = (note.Seed & 1u) == 0u ? -0.045f : 0.040f;
+                frequency *= 1f + direction * MathF.Sin(MathF.PI * scoopPhase);
+            }
+
+
             if (note.TrillDepth > 0f)
             {
-                // Fast ~30 Hz wobble on emotional or long syllables: "tr-r-rill!".
-                frequency += note.TrillDepth * MathF.Sin(TwoPi * note.TrillRate * absoluteTime);
+                // Smooth 15ms fade-in prevents an instantaneous frequency jump (click) at syllable onset
+                var trillFade = Math.Clamp(noteTime / 0.015f, 0f, 1f);
+                frequency += note.TrillDepth * trillFade * MathF.Sin(TwoPi * note.TrillRate * absoluteTime);
             }
 
             var growlDepth = note.StartGrowlDepth + (note.GrowlDepth - note.StartGrowlDepth) * curveT;
@@ -741,18 +753,19 @@ public sealed class DroidSynthesizer
 
             var modulator = MathF.Sin((float)modulatorPhase);
             var modulator2 = MathF.Sin((float)modulatorPhase2);
-            var fmIndex = note.StartFmIndex + (note.FmIndex - note.StartFmIndex) * curveT;
-            var fmIndex2 = note.StartFmIndex2 + (note.FmIndex2 - note.StartFmIndex2) * curveT;
+
+            // 2. Dynamic FM attack decay: bright consonant bite at onset, warming into a pure whistle
+            var fmBurst = 0.42f + 0.58f * MathF.Exp(-noteTime * 28f);
+            var fmIndex = (note.StartFmIndex + (note.FmIndex - note.StartFmIndex) * curveT) * fmBurst;
+            var fmIndex2 = (note.StartFmIndex2 + (note.FmIndex2 - note.StartFmIndex2) * curveT) * fmBurst;
+
             var carrier = MathF.Sin((float)carrierPhase + fmIndex * modulator + fmIndex2 * modulator2);
-            var triangleMix = Math.Clamp(profile.TriangleMix, 0f, 0.60f);
+            var triangleMix = Math.Clamp(profile.TriangleMix, 0f, 0.60f) * fmBurst;
             var wave =
                 (0.85f - triangleMix) * carrier +
                 triangleMix * Triangle(carrierPhase) +
-                0.15f * MathF.Sin((float)(carrierPhase * 3.01 + 0.55 * modulator2));
+                0.15f * fmBurst * MathF.Sin((float)(carrierPhase * 3.01 + 0.55 * modulator2));
 
-            // The envelope belongs to the word, not to the syllable: attack once at the
-            // beginning, sustain through the joints, release once at the end.
-            var timeInWord = (note.StartSample + n - note.WordStartSample) / (float)_sampleRate;
             var envelope = AdsrEnvelope(
                 timeInWord,
                 wordDuration,
@@ -925,6 +938,60 @@ public sealed class DroidSynthesizer
         var normalized = phase / (2d * Math.PI);
         normalized -= Math.Floor(normalized);
         return (float)(4d * Math.Abs(normalized - 0.5d) - 1d);
+    }
+
+    /// <summary>
+    /// 2-pole resonant state-variable low-pass filter with an envelope follower.
+    /// Eliminates static high-frequency harmonic "rails" and emulates an analog ARP 2600 filter.
+    /// </summary>
+    private void ApplyDynamicLowPassFilter(Span<float> buffer, DroidVoiceProfile profile)
+    {
+        if (buffer.IsEmpty)
+        {
+            return;
+        }
+
+        // Base cutoff scales with the droid's vocal range (e.g. ~2600 Hz for R2, ~1800 Hz for Grumpy)
+        var baseCutoff = Math.Clamp(profile.MaxFreq * 1.65f, 1100f, 5200f);
+        var maxCutoff = Math.Min(_sampleRate * 0.42f, baseCutoff * 2.6f);
+
+        // Resonance Q ≈ 1.45 gives that warm, vocal analog whistle character
+        const float damping = 1f / 1.45f;
+
+        var low = 0f;
+        var band = 0f;
+        var envFollower = 0f;
+
+        var attackCoeff = 1f - MathF.Exp(-1f / (0.004f * _sampleRate));
+        var releaseCoeff = 1f - MathF.Exp(-1f / (0.045f * _sampleRate));
+
+        for (var i = 0; i < buffer.Length; i++)
+        {
+            var input = buffer[i];
+            var absIn = MathF.Abs(input);
+
+            // Track signal loudness envelope smoothly
+            envFollower += (absIn > envFollower ? attackCoeff : releaseCoeff) * (absIn - envFollower);
+
+            // Cutoff frequency breathes dynamically with signal energy
+            var dynamicCutoff = Math.Clamp(
+                baseCutoff + (maxCutoff - baseCutoff) * MathF.Min(1f, envFollower * 2.2f),
+                400f,
+                _sampleRate * 0.45f);
+
+            var f = 2f * MathF.Sin(MathF.PI * dynamicCutoff / _sampleRate);
+            f = Math.Clamp(f, 0.01f, 0.85f);
+
+            // Two-pass oversampled SVF step for rock-solid stability at high frequencies
+            for (var step = 0; step < 2; step++)
+            {
+                var high = input - low - damping * band;
+                band += (f * 0.5f) * high;
+                low += (f * 0.5f) * band;
+            }
+
+            buffer[i] = low;
+        }
     }
 
     private static void ApplyPeakCeiling(Span<float> buffer)
