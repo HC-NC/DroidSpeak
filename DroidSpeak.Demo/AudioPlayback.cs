@@ -81,14 +81,42 @@ internal static class AudioPlayback
             device.MasterMixer.AddComponent(player);
             player.Play();
 
-            var timeout = TimeSpan.FromSeconds(Math.Max(2.0, player.Duration + 2.0));
-            if (!finished.Task.Wait(timeout))
+            player.PlaybackEnded += (_, _) => finished.TrySetResult(true);
+            device.Start();
+            device.MasterMixer.AddComponent(player);
+            player.Play();
+
+            var allowInterrupt = !Console.IsInputRedirected && player.Duration > 1.2f;
+            if (allowInterrupt)
             {
-                error = "playback timed out";
-                return false;
+                Console.WriteLine("  [Press any key to stop...]");
+                while (Console.KeyAvailable)
+                {
+                    Console.ReadKey(intercept: true);
+                }
+            }
+
+            var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(Math.Max(2.0, player.Duration + 2.0));
+            while (!finished.Task.Wait(30))
+            {
+                if (allowInterrupt && Console.KeyAvailable)
+                {
+                    Console.ReadKey(intercept: true);
+                    player.Stop();
+                    Console.WriteLine("  [Stopped]");
+                    return true;
+                }
+
+                if (DateTime.UtcNow > deadline)
+                {
+                    player.Stop();
+                    error = "playback timed out";
+                    return false;
+                }
             }
 
             return true;
+
         }
         catch (Exception exception)
         {

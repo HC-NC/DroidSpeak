@@ -18,6 +18,7 @@
 - **Deterministic Synthesis:** Syllable variations are seeded via a cross-platform FNV-1a hash of lowercase words—the same text and seed always produce bit-identical audio.
 - **Emotion & Typography NLP (`DroidSpeak.NLP`):** Extracts continuous `Valence–Arousal` vectors from punctuation (`!`, `?`, `...`), `ALL CAPS`, and a built-in bilingual (EN/RU) lexicon.
 - **Procedural FM & Legato DSP (`DroidSpeak.DSP`):** Continuous-phase sine/triangle oscillators, dual FM modulators, exponential portamento, word-level ADSR envelopes, consonant noise/growl shaping, and procedural chatter (30 Hz trills, micro-arpeggios, relay clicks).
+- **Polyphonic Music & Melody Engine (`DroidSpeak.Music`):** Built-in zero-dependency parsers for Standard MIDI Files (`.mid`, SMF Format 0 & 1) and RTTTL ringtones, rendered with an expressive lead droid voice (portamento glides, trills, upward chirps) and relay-click percussion, plus a `--solo` lead-only mode.
 - **Customizable Voice Profiles:** Built-in presets (`R2`, `Grumpy`, `Bass`, `Tiny`) plus JSON serialization to craft custom droid personalities.
 - **Acoustic Steganography Modem (`DroidSpeak.Modem`):** Hides UTF-8 text payloads inside droid speech using FSK (3400 / 4400 Hz) with Hamming(12,8) forward error correction, bit interleaving, CRC-8, and an in-house radix-2 FFT decoder.
 - **Allocation-Friendly API:** Supports writing directly into pre-allocated `Span<float>` buffers alongside 16-bit mono PCM `.wav` export.
@@ -63,6 +64,7 @@ DroidSpeak.sln
 │   ├── DroidVoiceProfile.cs
 │   ├── NLP/               # Text, syllable, and emotion analysis
 │   ├── DSP/               # FM synthesizer, chatter generator, WAV writer
+│   ├── Music/             # MIDI & RTTTL parsers, polyphonic droid music synthesizer
 │   └── Modem/             # FSK acoustic encoder/decoder & radix-2 FFT
 ├── DroidSpeak.Demo        # Interactive CLI/REPL with live playback (SoundFlow)
 └── DroidSpeak.Tests       # xUnit test suite
@@ -85,10 +87,13 @@ dotnet test
 # Start interactive REPL mode
 dotnet run --project DroidSpeak.Demo
 
-# Synthesize and play a single phrase
-dotnet run --project DroidSpeak.Demo -- "Hello there! Systems online."
+# Synthesize and play a single phrase with a chosen voice profile
+dotnet run --project DroidSpeak.Demo -- "Hello there! Systems online." -v r2
 
-# Export to a 16-bit PCM WAV file without playback
+# Play a Standard MIDI file in solo lead-whistle mode
+dotnet run --project DroidSpeak.Demo -- -m melody.mid --solo -v r2
+
+# Export speech or music to a 16-bit PCM WAV file without playback
 dotnet run --project DroidSpeak.Demo -- "ALERT! Reactor overheating!" -o alert.wav --no-play
 ```
 
@@ -100,13 +105,14 @@ dotnet run --project DroidSpeak.Demo -- "ALERT! Reactor overheating!" -o alert.w
 | `/voice [r2\|grumpy\|bass\|tiny]` | Show or switch the active droid voice profile |
 | `/voice json <file.json>` | Load a custom voice profile from JSON |
 | `/voice save <file.json>` | Save the current voice profile to JSON |
+| `/music [--solo] <file.mid\|rtttl>` | Play a MIDI file or RTTTL ringtone using the active voice (press any key to stop) |
 | `/transmit <text>` | Embed hidden UTF-8 text into droid speech, save `transmit.wav`, and decode it |
 | `/demo` | Play four built-in emotional test phrases |
-| `/save <file.wav>` | Save the last synthesized utterance to a WAV file |
+| `/save <file.wav>` | Save the last synthesized utterance or melody to a WAV file |
 | `/help` | Show available commands |
 | `/exit` | Quit the REPL |
 
-> **Note:** `DroidSpeak.Demo` uses **SoundFlow** for cross-platform live audio playback. `DroidSpeak.Core` itself has zero third-party packages.
+> **Note:** `DroidSpeak.Demo` uses **SoundFlow** for cross-platform live audio playback (with instant keypress interruption). `DroidSpeak.Core` itself has zero third-party packages.
 
 ---
 
@@ -154,6 +160,30 @@ DroidVoiceProfile loaded = DroidVoiceProfile.FromJson(json);
 | **`Grumpy`** | 220 | 1100 | 0.92 | 1.45 | 0.34 | 0.36 |
 | **`Bass`** | 120 | 650 | 0.82 | 1.20 | 0.26 | 0.30 |
 | **`Tiny`** | 600 | 2400 | 1.38 | 1.10 | 0.78 | 0.16 |
+
+### Music & Melodies (`DroidSpeak.Music`)
+
+Render Standard MIDI files (`.mid`) or RTTTL ringtone strings using any droid voice profile:
+
+```csharp
+using DroidSpeak;
+using DroidSpeak.DSP;
+using DroidSpeak.Music;
+
+var musicSynth = new DroidMusicSynthesizer(profile: DroidVoiceProfile.R2);
+
+// Parse and render an RTTTL ringtone
+DroidScore joy = RtttlParser.Shared.Parse(
+    "OdeToJoy:d=4,o=5,b=125:e,e,f,g,g,f,e,d,c,c,d,e,e.,8d,2d");
+float[] joySamples = musicSynth.Render(joy);
+WavWriter.Write("joy.wav", joySamples, musicSynth.SampleRate);
+
+// Load a Standard MIDI file (.mid) and render only the upper lead melody in solo droid whistle mode
+DroidScore midiScore = MidiParser.Shared.Load("melody.mid");
+float[] soloSamples = musicSynth.Render(midiScore, DroidVoiceProfile.R2, soloMelodyOnly: true);
+```
+
+Custom musical notations can also be plugged in by implementing `IScoreParser` or `ITextScoreParser`.
 
 ### Acoustic Steganography Modem (`DroidSpeak.Modem`)
 
