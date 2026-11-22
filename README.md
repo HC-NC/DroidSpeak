@@ -22,6 +22,37 @@
 - **Acoustic Steganography Modem (`DroidSpeak.Modem`):** Hides UTF-8 text payloads inside droid speech using FSK (3400 / 4400 Hz) with Hamming(12,8) forward error correction, bit interleaving, CRC-8, and an in-house radix-2 FFT decoder.
 - **Allocation-Friendly API:** Supports writing directly into pre-allocated `Span<float>` buffers alongside 16-bit mono PCM `.wav` export.
 
+## Audio Demos
+
+Listen to raw procedural audio generated directly by `DroidSpeak.Core` (zero samples, pure C# DSP):
+
+<details>
+<summary>🔊 <b>1. Expressive Astromech (<code>R2</code>)</b> — <i>Emotion shifts, trills & legato glides</i></summary>
+
+> *"Beep-beep! Oh no, wait-wait, WHAT IS THAT CRITICAL ERROR?! Well... guess I'll have to fix the console again..."*
+
+https://github.com/user-attachments/assets/1b717af0-5443-464e-9660-1f1974bcccb3
+
+</details>
+
+<details>
+<summary>🔊 <b>2. Grumpy Unit (<code>Grumpy</code>)</b> — <i>Low pitch, heavy FM growl</i></summary>
+
+> *"Bzzzt... I really don't want to compile this legacy code... Fine, executing now!"*
+
+https://github.com/user-attachments/assets/9d936f29-e37c-4f2a-af88-7e1a1bbf1a22
+
+</details>
+
+<details>
+<summary>🔊 <b>3. Acoustic Modem (<code>FSK Stego</code>)</b> — <i>Hidden UTF-8 payload embedded in speech</i></summary>
+
+> `/transmit Secret coordinates: 56.0153, 92.8932`
+
+https://github.com/user-attachments/assets/fe18eafe-f8b1-4112-b45c-e7d553d30709
+
+</details>
+
 ---
 
 ## Project Structure
