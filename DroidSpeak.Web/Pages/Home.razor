@@ -1,0 +1,607 @@
+﻿@page "/"
+@using System.Globalization
+@using DroidSpeak
+@using DroidSpeak.DSP
+@using DroidSpeak.Modem
+@using DroidSpeak.Music
+@using DroidSpeak.NLP
+@inject IJSRuntime JS
+
+<PageTitle>DroidSpeak — Interactive Web Playground</PageTitle>
+
+<div class="ds-shell">
+    <header class="ds-header">
+        <div class="ds-title-row">
+            <svg class="ds-logo" viewBox="0 0 64 64" aria-hidden="true">
+                <rect width="64" height="64" rx="16" fill="#131a26" stroke="#243044" stroke-width="3" />
+                <circle cx="32" cy="32" r="20" fill="#0b0f17" stroke="#38bdf8" stroke-width="3.5" />
+                <circle cx="32" cy="32" r="10" fill="#38bdf8" fill-opacity="0.25" stroke="#38bdf8" stroke-width="2" />
+                <circle cx="32" cy="32" r="4.5" fill="#e6edf3" />
+                <circle cx="27" cy="27" r="2.2" fill="#38bdf8" />
+            </svg>
+            <h1>DroidSpeak</h1>
+            <span class="ds-badge">WASM · ZERO DEPENDENCIES</span>
+        </div>
+        <p>Procedural astromech speech, MIDI/RTTTL music &amp; FSK steganography in C#.</p>
+    </header>
+
+    <section class="ds-card">
+        <div class="ds-row-between">
+            <label class="ds-label" style="margin:0">1. Droid Voice Profile</label>
+            <button class="ds-chip" @onclick="() => ShowCustomizer = !ShowCustomizer">
+                @(ShowCustomizer ? "▲ Hide Customizer" : "🎛️ Customize & Export JSON")
+            </button>
+        </div>
+
+        <div class="ds-pills" style="margin-top:0.65rem">
+            @foreach (var preset in VoicePresets)
+            {
+                <button class="ds-pill @(SelectedVoice == preset.Key ? "active" : "")"
+                        @onclick="() => SelectPreset(preset.Key)">
+                    <strong>@preset.Label</strong>
+                    <span>@preset.Desc</span>
+                </button>
+            }
+        </div>
+
+        @if (ShowCustomizer)
+        {
+            <div class="ds-customizer">
+                <div class="ds-sliders">
+                    <label>
+                        Min Freq: <strong>@CustomMinFreq Hz</strong>
+                        <input type="range" min="80" max="1000" step="10" @bind="CustomMinFreq" @bind:event="oninput" @onchange="MarkCustom" />
+                    </label>
+                    <label>
+                        Max Freq: <strong>@CustomMaxFreq Hz</strong>
+                        <input type="range" min="400" max="3200" step="20" @bind="CustomMaxFreq" @bind:event="oninput" @onchange="MarkCustom" />
+                    </label>
+                    <label>
+                        Speed: <strong>@((CustomSpeedPct / 100f).ToString("0.00", CultureInfo.InvariantCulture))x</strong>
+                        <input type="range" min="50" max="200" step="5" @bind="CustomSpeedPct" @bind:event="oninput" @onchange="MarkCustom" />
+                    </label>
+                    <label>
+                        FM Intensity: <strong>@((CustomFmPct / 100f).ToString("0.00", CultureInfo.InvariantCulture))</strong>
+                        <input type="range" min="10" max="250" step="5" @bind="CustomFmPct" @bind:event="oninput" @onchange="MarkCustom" />
+                    </label>
+                    <label>
+                        Chatter / Trills: <strong>@CustomChatterPct%</strong>
+                        <input type="range" min="0" max="100" step="5" @bind="CustomChatterPct" @bind:event="oninput" @onchange="MarkCustom" />
+                    </label>
+                    <label>
+                        Triangle Mix: <strong>@CustomTrianglePct%</strong>
+                        <input type="range" min="0" max="60" step="2" @bind="CustomTrianglePct" @bind:event="oninput" @onchange="MarkCustom" />
+                    </label>
+                </div>
+                <div class="ds-actions" style="margin-top:0.75rem">
+                    <button class="ds-chip" @onclick="ExportProfileJson">⬇ Download Profile (.json)</button>
+                    <label class="ds-chip">
+                        📂 Import Profile (.json)
+                        <InputFile OnChange="ImportProfileJson" accept=".json" style="display:none" />
+                    </label>
+                </div>
+            </div>
+        }
+    </section>
+
+    <nav class="ds-tabs">
+        <button class="ds-tab @(ActiveTab == TabMode.Speech ? "active" : "")" @onclick="() => ActiveTab = TabMode.Speech">
+            🗣️ Text-to-Beep
+        </button>
+        <button class="ds-tab @(ActiveTab == TabMode.Music ? "active" : "")" @onclick="() => ActiveTab = TabMode.Music">
+            🎵 Music (MIDI / RTTTL)
+        </button>
+        <button class="ds-tab @(ActiveTab == TabMode.Modem ? "active" : "")" @onclick="() => ActiveTab = TabMode.Modem">
+            📡 Acoustic Modem
+        </button>
+    </nav>
+
+    <section class="ds-card">
+        @if (ActiveTab == TabMode.Speech)
+        {
+            <label class="ds-label">2. Enter Text (English or Russian)</label>
+            <textarea class="ds-input" rows="3" @bind="SpeechText" @bind:event="oninput"
+                      placeholder="Type anything... Use !, ?, ... or ALL CAPS for emotion!"></textarea>
+
+            <div class="ds-presets-row">
+                <button class="ds-chip" @onclick='() => SpeechText = "Beep-beep! Hello there, systems are online!"'>Greeting</button>
+                <button class="ds-chip" @onclick='() => SpeechText = "ALERT! Critical error in sector 7!"'>Alert!</button>
+                <button class="ds-chip" @onclick='() => SpeechText = "Oh no... everything is broken again..."'>Sad...</button>
+                <button class="ds-chip" @onclick='() => SpeechText = "Привет! Как дела? Всё работает отлично!"'>Русский</button>
+            </div>
+
+            <div class="ds-actions">
+                <button class="ds-btn primary" disabled="@IsBusy" @onclick="SynthesizeSpeech">
+                    @(IsBusy ? "⏳ Synthesizing..." : "▶ Synthesize & Play")
+                </button>
+            </div>
+        }
+        else if (ActiveTab == TabMode.Music)
+        {
+            <label class="ds-label">2. RTTTL Ringtone String or Standard MIDI File (.mid)</label>
+            <textarea class="ds-input" rows="2" @bind="RtttlInput" @bind:event="oninput"
+                      placeholder="Paste RTTTL string..."></textarea>
+
+            <div class="ds-presets-row">
+                <button class="ds-chip" @onclick='() => RtttlInput = "Fanfare:d=16,o=5,b=150:c,e,g,8c6,16p,g,4c6"'>Fanfare</button>
+                <button class="ds-chip" @onclick='() => RtttlInput = "OdeToJoy:d=4,o=5,b=125:e,e,f,g,g,f,e,d,c,c,d,e,e.,8d,2d"'>Ode to Joy</button>
+                <label class="ds-chip">
+                    📂 Upload .MID File
+                    <InputFile OnChange="HandleMidiUpload" accept=".mid,.midi" style="display:none" />
+                </label>
+            </div>
+
+            <label class="ds-checkbox">
+                <input type="checkbox" @bind="SoloMelodyOnly" />
+                <span><strong>Solo Lead Whistle Mode</strong> (mute harmony chords, keep expressive droid melody)</span>
+            </label>
+
+            <div class="ds-actions">
+                <button class="ds-btn primary" disabled="@IsBusy" @onclick="PlayRtttl">
+                    @(IsBusy ? "⏳ Rendering..." : "▶ Render & Play RTTTL")
+                </button>
+            </div>
+        }
+        else if (ActiveTab == TabMode.Modem)
+        {
+            <div class="ds-subtabs">
+                <button class="ds-chip @(ModemSubMode == 0 ? "active" : "")" @onclick="() => { ModemSubMode = 0; DecodedResult = null; }">📤 Encode into Speech</button>
+                <button class="ds-chip @(ModemSubMode == 1 ? "active" : "")" @onclick="() => { ModemSubMode = 1; DecodedResult = null; }">📥 Decode from .WAV File</button>
+            </div>
+
+            @if (ModemSubMode == 0)
+            {
+                <label class="ds-label">2. Secret UTF-8 Message to Embed into Droid Speech (max 255 bytes)</label>
+                <input class="ds-input" type="text" @bind="ModemText" @bind:event="oninput"
+                       placeholder="Secret coordinates: 56.0153, 92.8932" />
+
+                <div class="ds-actions">
+                    <button class="ds-btn primary" disabled="@IsBusy" @onclick="EncodeModem">
+                        @(IsBusy ? "⏳ Encoding..." : "📡 Encode & Play")
+                    </button>
+                </div>
+            }
+            else
+            {
+                <label class="ds-label">2. Upload a 16-bit PCM .WAV File Containing FSK Droid Speech</label>
+                <div class="ds-actions">
+                    <label class="ds-btn primary">
+                        📂 Choose .WAV File to Decode
+                        <InputFile OnChange="HandleWavDecodeUpload" accept=".wav" style="display:none" />
+                    </label>
+                </div>
+            }
+
+            @if (!string.IsNullOrEmpty(DecodedResult))
+            {
+                <div class="ds-modem-box">
+                    <span class="ds-modem-tag">FFT DECODER OUTPUT</span>
+                    <code>@DecodedResult</code>
+                </div>
+            }
+        }
+
+        @if (IsBusy && RenderProgress > 0)
+        {
+            <div class="ds-progress-wrap">
+                <div class="ds-progress-header">
+                    <span>@StatusMessage</span>
+                    <strong>@RenderProgress%</strong>
+                </div>
+                <div class="ds-progress-track">
+                    <div class="ds-progress-fill" style="width: @(RenderProgress)%"></div>
+                </div>
+            </div>
+        }
+
+
+        @if (!string.IsNullOrEmpty(AudioUrl))
+        {
+            <div class="ds-player-box">
+                <audio controls autoplay src="@AudioUrl" class="ds-audio"></audio>
+                <button class="ds-btn" @onclick="DownloadLastWav">⬇ Download .WAV</button>
+            </div>
+        }
+
+        @if (!string.IsNullOrEmpty(StatusMessage))
+        {
+            <div class="ds-status @(IsError ? "error" : "")">@StatusMessage</div>
+        }
+    </section>
+
+    <footer class="ds-footer">
+        <div class="ds-shields">
+            <a href="https://github.com/HC-NC/DroidSpeak" target="_blank">
+                <img src="https://img.shields.io/badge/GitHub-DroidSpeak-181717?style=flat&logo=github&logoColor=white" alt="GitHub" />
+            </a>
+            <a href="https://github.com/HC-NC/DroidSpeak/releases/latest" target="_blank">
+                <img src="https://img.shields.io/github/v/release/HC-NC/DroidSpeak?style=flat" alt="Release" />
+            </a>
+            <a href="https://github.com/HC-NC/DroidSpeak/blob/main/LICENSE" target="_blank">
+                <img src="https://img.shields.io/github/license/HC-NC/DroidSpeak?style=flat" alt="License" />
+            </a>
+            <a href="https://dotnet.microsoft.com/" target="_blank">
+                <img src="https://img.shields.io/badge/-10.0-512BD4?style=flat&logo=dotnet&logoColor=white" alt=".NET 10" />
+            </a>
+        </div>
+        <div>Built with .NET 10 Blazor WebAssembly</div>
+    </footer>
+</div>
+
+@code {
+    private enum TabMode { Speech, Music, Modem }
+
+    private TabMode ActiveTab { get; set; } = TabMode.Speech;
+    private int ModemSubMode { get; set; } = 0; // 0 = Encode, 1 = Decode
+    private string SelectedVoice { get; set; } = "r2";
+    private bool ShowCustomizer { get; set; }
+    private bool IsBusy { get; set; }
+    private int RenderProgress { get; set; }
+
+    // Customizer parameters as integers (avoids decimal-separator issues in HTML range inputs)
+    private int CustomMinFreq { get; set; } = 350;
+    private int CustomMaxFreq { get; set; } = 1600;
+    private int CustomSpeedPct { get; set; } = 100;
+    private int CustomFmPct { get; set; } = 100;
+    private int CustomChatterPct { get; set; } = 50;
+    private int CustomTrianglePct { get; set; } = 23;
+
+    private string SpeechText { get; set; } = "Beep-beep! Hello there, systems are online!";
+    private string RtttlInput { get; set; } = "OdeToJoy:d=4,o=5,b=125:e,e,f,g,g,f,e,d,c,c,d,e,e.,8d,2d";
+    private string ModemText { get; set; } = "Secret coordinates: 56.0153, 92.8932";
+
+    private bool SoloMelodyOnly { get; set; } = true;
+    private float[]? LastSamples { get; set; }
+    private int LastSampleRate { get; set; } = DroidSynthesizer.DefaultSampleRate;
+    private string LastFileName { get; set; } = "droid_output.wav";
+    private string? AudioUrl { get; set; }
+    private string? StatusMessage { get; set; }
+    private string? DecodedResult { get; set; }
+    private bool IsError { get; set; }
+
+    private static readonly (string Key, string Label, string Desc)[] VoicePresets =
+    [
+        ("r2", "R2 Classic", "350–1600 Hz · Expressive"),
+        ("grumpy", "Grumpy", "220–1100 Hz · Heavy FM"),
+        ("bass", "Bass Unit", "120–650 Hz · Deep Droid"),
+        ("tiny", "Tiny Unit", "600–2400 Hz · Fast Chirps"),
+    ];
+
+    private DroidVoiceProfile BuildActiveProfile() => new DroidVoiceProfile
+    {
+        MinFreq = CustomMinFreq,
+        MaxFreq = Math.Max(CustomMinFreq + 50, CustomMaxFreq),
+        SpeedMultiplier = CustomSpeedPct / 100f,
+        FmIntensity = CustomFmPct / 100f,
+        ChatterProbability = CustomChatterPct / 100f,
+        TriangleMix = CustomTrianglePct / 100f
+    }.Normalized();
+
+    private void SelectPreset(string key)
+    {
+        SelectedVoice = key;
+        var p = key switch
+        {
+            "grumpy" => DroidVoiceProfile.Grumpy,
+            "bass" => DroidVoiceProfile.Bass,
+            "tiny" => DroidVoiceProfile.Tiny,
+            _ => DroidVoiceProfile.R2
+        };
+
+        CustomMinFreq = (int)MathF.Round(p.MinFreq);
+        CustomMaxFreq = (int)MathF.Round(p.MaxFreq);
+        CustomSpeedPct = (int)MathF.Round(p.SpeedMultiplier * 100f);
+        CustomFmPct = (int)MathF.Round(p.FmIntensity * 100f);
+        CustomChatterPct = (int)MathF.Round(p.ChatterProbability * 100f);
+        CustomTrianglePct = (int)MathF.Round(p.TriangleMix * 100f);
+    }
+
+    private void MarkCustom() => SelectedVoice = "custom";
+
+    private async Task ExportProfileJson()
+    {
+        var json = BuildActiveProfile().ToJson();
+        var fileName = $"droid_profile_{SelectedVoice}.json";
+        await JS.InvokeVoidAsync("droidAudio.downloadText", json, fileName);
+        SetStatus($"Exported {fileName}");
+    }
+
+    private async Task ImportProfileJson(InputFileChangeEventArgs e)
+    {
+        try
+        {
+            using var stream = e.File.OpenReadStream(maxAllowedSize: 64 * 1024);
+            using var reader = new StreamReader(stream);
+            var json = await reader.ReadToEndAsync();
+
+            var p = DroidVoiceProfile.FromJson(json).Normalized();
+            SelectedVoice = "custom";
+            CustomMinFreq = (int)MathF.Round(p.MinFreq);
+            CustomMaxFreq = (int)MathF.Round(p.MaxFreq);
+            CustomSpeedPct = (int)MathF.Round(p.SpeedMultiplier * 100f);
+            CustomFmPct = (int)MathF.Round(p.FmIntensity * 100f);
+            CustomChatterPct = (int)MathF.Round(p.ChatterProbability * 100f);
+            CustomTrianglePct = (int)MathF.Round(p.TriangleMix * 100f);
+
+            SetStatus($"Loaded profile from {e.File.Name}");
+        }
+        catch (Exception ex)
+        {
+            SetError($"Invalid JSON profile: {ex.Message}");
+        }
+    }
+
+
+    private async Task SynthesizeSpeech()
+    {
+        if (string.IsNullOrWhiteSpace(SpeechText))
+        {
+            SetError("Please enter some text first.");
+            return;
+        }
+
+        IsBusy = true;
+        SetStatus("Synthesizing speech...");
+        await Task.Yield();
+
+        try
+        {
+            var synth = new DroidSynthesizer(profile: BuildActiveProfile());
+            var samples = synth.Synthesize(SpeechText);
+
+            var phrases = TextParser.Parse(SpeechText);
+            var info = phrases.Count > 0
+                ? $"Valence={phrases.Average(p => p.Emotion.Valence):0.00}, Arousal={phrases.Average(p => p.Emotion.Arousal):0.00}"
+                : "Rendered";
+
+            await LoadIntoPlayer(samples, synth.SampleRate, "droid_speech.wav", info);
+        }
+        catch (Exception ex)
+        {
+            SetError(ex.Message);
+        }
+        finally
+        {
+            IsBusy = false;
+        }
+    }
+
+    private async Task PlayRtttl()
+    {
+        if (string.IsNullOrWhiteSpace(RtttlInput))
+        {
+            SetError("Please enter an RTTTL string or upload a .mid file.");
+            return;
+        }
+
+        IsBusy = true;
+        SetStatus("Rendering RTTTL...");
+        await Task.Yield();
+
+        try
+        {
+            var score = RtttlParser.Shared.Parse(RtttlInput);
+            await RenderScoreToPlayer(score, "droid_rtttl.wav");
+        }
+        catch (Exception ex)
+        {
+            SetError($"RTTTL error: {ex.Message}");
+        }
+        finally
+        {
+            IsBusy = false;
+        }
+    }
+
+    private async Task StepProgressAsync(int percent, string message)
+    {
+        RenderProgress = percent;
+        StatusMessage = message;
+        IsError = false;
+        StateHasChanged();
+        await Task.Delay(16); // Yield 1 animation frame (16ms) so the browser repaints the progress bar
+    }
+
+    private async Task<byte[]> ReadBrowserFileWithProgressAsync(IBrowserFile file, long maxAllowedSize, int startPct, int endPct)
+    {
+        using var stream = file.OpenReadStream(maxAllowedSize);
+        using var ms = new MemoryStream((int)Math.Min(file.Size, maxAllowedSize));
+        var buffer = new byte[65536];
+        long totalRead = 0;
+        int read;
+
+        while ((read = await stream.ReadAsync(buffer, 0, buffer.Length)) > 0)
+        {
+            ms.Write(buffer, 0, read);
+            totalRead += read;
+            if (file.Size > 0)
+            {
+                int pct = startPct + (int)((endPct - startPct) * (totalRead / (double)file.Size));
+                await StepProgressAsync(pct, $"Reading {file.Name} ({totalRead / 1024} KB)...");
+            }
+        }
+
+        return ms.ToArray();
+    }
+
+    private async Task RenderScoreWithProgressAsync(DroidScore score, string wavName, string? fallbackTitle = null)
+    {
+        var profile = BuildActiveProfile();
+        var musicSynth = new DroidMusicSynthesizer(profile: profile);
+        int totalSamples = musicSynth.GetSampleCount(score);
+        var finalBuffer = new float[totalSamples];
+
+        // Render in time windows (chunks of ~2.5 seconds) so we allocate only a tiny slice per step
+        int chunkSamples = musicSynth.SampleRate * 2;
+        int totalNotes = score.Notes.Count;
+
+        if (totalSamples <= chunkSamples || totalNotes <= 80)
+        {
+            await StepProgressAsync(65, $"Synthesizing {totalNotes} notes...");
+            musicSynth.Render(score, finalBuffer, soloMelodyOnly: SoloMelodyOnly);
+        }
+        else
+        {
+            // Render by note batches into small window slices instead of cloning the full buffer
+            const int batchSize = 150;
+            var batchList = new List<ScoreNote>(batchSize);
+            var scratch = new float[totalSamples];
+
+            for (int offset = 0; offset < totalNotes; offset += batchSize)
+            {
+                batchList.Clear();
+                int count = Math.Min(batchSize, totalNotes - offset);
+                float maxEndSec = 0f;
+
+                for (int k = 0; k < count; k++)
+                {
+                    var note = score.Notes[offset + k];
+                    batchList.Add(note);
+                    var end = note.StartSeconds + note.DurationSeconds;
+                    if (end > maxEndSec) maxEndSec = end;
+                }
+
+                var batchScore = new DroidScore(batchList, score.Title);
+                int sliceLen = Math.Min(totalSamples, musicSynth.GetSampleCount(batchScore));
+                var slice = scratch.AsSpan(0, sliceLen);
+
+                musicSynth.Render(batchScore, slice, soloMelodyOnly: SoloMelodyOnly);
+
+                for (int i = 0; i < sliceLen; i++)
+                {
+                    finalBuffer[i] = Math.Clamp(finalBuffer[i] + slice[i], -1f, 1f);
+                }
+
+                int pct = 30 + (int)(65.0 * (offset + count) / totalNotes);
+                await StepProgressAsync(pct, $"Rendering notes: {offset + count} / {totalNotes}...");
+            }
+        }
+
+        await StepProgressAsync(98, "Encoding WAV...");
+
+        var title = string.IsNullOrWhiteSpace(score.Title) ? (fallbackTitle ?? "Melody") : score.Title;
+        var extra = $"'{title}' · {totalNotes} notes{(SoloMelodyOnly ? " · solo" : "")}";
+        await LoadIntoPlayer(finalBuffer, musicSynth.SampleRate, wavName, extra);
+    }
+
+    private async Task HandleWavDecodeUpload(InputFileChangeEventArgs e)
+    {
+        IsBusy = true;
+        DecodedResult = null;
+        await StepProgressAsync(5, $"Reading {e.File.Name}...");
+
+        try
+        {
+            var bytes = await ReadBrowserFileWithProgressAsync(e.File, 10 * 1024 * 1024, startPct: 5, endPct: 50);
+
+            await StepProgressAsync(65, "Parsing 16-bit PCM WAV header...");
+            var (samples, sampleRate) = WavReader.ReadMonoPcm16(bytes);
+
+            await StepProgressAsync(85, "Running FFT demodulator & Hamming ECC...");
+            var decoded = DroidModemDecoder.Decode(samples, sampleRate);
+
+            await StepProgressAsync(100, "Done!");
+
+            DecodedResult = decoded ?? "<no valid FSK droid packet found in this WAV>";
+            SetStatus(decoded is not null
+                ? $"Successfully decoded {decoded.Length} characters from {e.File.Name}."
+                : $"Finished scanning {e.File.Name}, no FSK payload detected.");
+        }
+        catch (Exception ex)
+        {
+            SetError($"WAV decode error: {ex.Message}");
+        }
+        finally
+        {
+            IsBusy = false;
+            RenderProgress = 0;
+        }
+    }
+
+    private async Task HandleMidiUpload(InputFileChangeEventArgs e)
+    {
+        IsBusy = true;
+        RenderProgress = 2;
+        SetStatus($"Reading {e.File.Name}...");
+        await Task.Delay(1);
+
+        try
+        {
+            var bytes = await ReadBrowserFileWithProgressAsync(e.File, 2 * 1024 * 1024, startPct: 2, endPct: 25);
+
+            RenderProgress = 30;
+            SetStatus("Parsing MIDI structure...");
+            await Task.Delay(1);
+
+            var score = MidiParser.Shared.Parse(bytes);
+            await RenderScoreWithProgressAsync(score, Path.ChangeExtension(e.File.Name, ".wav"), e.File.Name);
+        }
+        catch (Exception ex)
+        {
+            SetError($"MIDI error: {ex.Message}");
+        }
+        finally
+        {
+            IsBusy = false;
+            RenderProgress = 0;
+        }
+    }
+
+    private async Task RenderScoreToPlayer(DroidScore score, string wavName, string? fallbackTitle = null)
+    {
+        await RenderScoreWithProgressAsync(score, wavName, fallbackTitle);
+    }
+
+    private async Task EncodeModem()
+    {
+        if (string.IsNullOrWhiteSpace(ModemText))
+        {
+            SetError("Please enter a payload message.");
+            return;
+        }
+
+        IsBusy = true;
+        SetStatus("Encoding FSK packet into speech...");
+        await Task.Yield();
+
+        try
+        {
+            var synth = new DroidSynthesizer(profile: BuildActiveProfile());
+            var speech = synth.Synthesize(ModemText);
+            var mixed = DroidModemEncoder.EncodeIntoSpeech(ModemText, speech, synth.SampleRate);
+
+            DecodedResult = DroidModemDecoder.Decode(mixed, synth.SampleRate) ?? "<self-check decode failed>";
+            await LoadIntoPlayer(mixed, synth.SampleRate, "droid_transmit.wav", "FSK Stego Ready");
+        }
+        catch (Exception ex)
+        {
+            SetError(ex.Message);
+        }
+        finally
+        {
+            IsBusy = false;
+        }
+    }
+
+    private async Task LoadIntoPlayer(float[] samples, int sampleRate, string fileName, string details)
+    {
+        LastSamples = samples;
+        LastSampleRate = sampleRate;
+        LastFileName = fileName;
+
+        AudioUrl = await JS.InvokeAsync<string>("droidAudio.createWavUrl", samples, sampleRate);
+        var sec = (samples.Length / (double)sampleRate).ToString("0.00", CultureInfo.InvariantCulture);
+        SetStatus($"{details} · {sec} s ({samples.Length} samples)");
+    }
+
+    private async Task DownloadLastWav()
+    {
+        if (LastSamples is not null)
+        {
+            await JS.InvokeVoidAsync("droidAudio.downloadWav", LastSamples, LastSampleRate, LastFileName);
+        }
+    }
+
+    private void SetStatus(string msg) { StatusMessage = msg; IsError = false; }
+    private void SetError(string msg) { StatusMessage = msg; IsError = true; }
+}
