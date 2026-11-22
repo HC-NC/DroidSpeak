@@ -9,6 +9,8 @@
 
 **Text-to-Beep Engine** — a zero-dependency, NativeAOT-compatible C# library (.NET 10) for procedural synthesis of expressive, astromech-style droid speech from arbitrary text, complete with voice profiles and an acoustic steganography modem.
 
+[![Launch Interactive Web Playground](https://img.shields.io/badge/Launch_Playground-Live_WASM_Demo-38BDF8?style=for-the-badge&logo=webassembly&logoColor=white)](https://hc-nc.github.io/DroidSpeak/)
+
 ---
 
 ## Features
@@ -67,6 +69,7 @@ DroidSpeak.sln
 │   ├── Music/             # MIDI & RTTTL parsers, polyphonic droid music synthesizer
 │   └── Modem/             # FSK acoustic encoder/decoder & radix-2 FFT
 ├── DroidSpeak.Demo        # Interactive CLI/REPL with live playback (SoundFlow)
+├── DroidSpeak.Web         # Interactive Blazor WebAssembly playground (GitHub Pages)
 └── DroidSpeak.Tests       # xUnit test suite
 ```
 
