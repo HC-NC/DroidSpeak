@@ -203,7 +203,8 @@ public sealed class DroidSynthesizer
                             segmentNoteStart,
                             segmentStartSample,
                             cursor,
-                            segmentGrowlFrequency);
+                            segmentGrowlFrequency,
+                            profile);
 
                         var hyphenRandom = new XorShift32(MixSeed(_seed, word.Hash, (uint)(0x900 + syllableIndex)));
                         var hyphenGap = Samples(0.018f + hyphenRandom.NextFloat() * 0.014f);
@@ -348,7 +349,8 @@ public sealed class DroidSynthesizer
                     segmentNoteStart,
                     segmentStartSample,
                     cursor,
-                    segmentGrowlFrequency);
+                    segmentGrowlFrequency,
+                    profile);
             }
 
             ApplyContour(plan.Events, phraseEventStart, phrase, profile);
@@ -370,7 +372,8 @@ public sealed class DroidSynthesizer
         int noteStart,
         int sampleStart,
         int sampleEnd,
-        float growlFrequency)
+        float growlFrequency,
+        DroidVoiceProfile profile)
     {
         if (plan.Events.Count <= noteStart)
         {
@@ -378,7 +381,14 @@ public sealed class DroidSynthesizer
         }
 
         ranges.Add((noteStart, plan.Events.Count));
-        ApplyWordEnvelope(plan.Events, noteStart, plan.Events.Count, sampleStart, sampleEnd, growlFrequency);
+        ApplyWordEnvelope(
+            plan.Events,
+            noteStart,
+            plan.Events.Count,
+            sampleStart,
+            sampleEnd,
+            growlFrequency,
+            profile);
     }
 
     private void ApplyWordEnvelope(
@@ -387,15 +397,18 @@ public sealed class DroidSynthesizer
         int endIndex,
         int wordStartSample,
         int wordEndSample,
-        float growlFrequency)
+        float growlFrequency,
+        DroidVoiceProfile profile)
     {
         var duration = Math.Max(1, wordEndSample - wordStartSample) / (float)_sampleRate;
 
-        // Attack only on the first syllable, release only on the last one.
-        var attack = Math.Clamp(duration * 0.14f, 0.009f, 0.016f);
-        var decay = Math.Clamp(duration * 0.20f, 0.010f, 0.030f);
-        var release = Math.Clamp(duration * 0.22f, 0.010f, 0.020f);
-        const float sustain = 0.74f;
+        // The ADSR shape comes from the voice profile. Attack only on the first syllable,
+        // release only on the last one; shrink everything proportionally when a word is too
+        // short to fit the requested attack, decay and release.
+        var attack = profile.AttackSeconds;
+        var decay = profile.DecaySeconds;
+        var release = profile.ReleaseSeconds;
+        var sustain = profile.SustainLevel;
 
         var envelopeTotal = attack + decay + release;
         if (envelopeTotal > duration * 0.90f)
@@ -453,6 +466,11 @@ public sealed class DroidSynthesizer
         bool isExclamation,
         DroidVoiceProfile profile)
     {
+        if (profile.WhistleProbability <= 0f)
+        {
+            return;
+        }
+
         var valence = MathF.Max(0f, phrase.Emotion.Valence);
         var arousal = MathF.Max(0f, phrase.Emotion.Arousal);
         var energy =
@@ -467,7 +485,10 @@ public sealed class DroidSynthesizer
             return;
         }
 
-        var chance = Math.Clamp(0.05f + 0.50f * energy, 0.05f, 0.78f);
+        var chance = Math.Clamp(
+            (0.05f + 0.50f * energy) * profile.WhistleProbability,
+            0f,
+            1f);
         var random = new XorShift32(MixSeed(_seed, word.Hash, (uint)(0x500 + syllableIndex)));
         if (random.NextFloat() >= chance)
         {
@@ -952,11 +973,14 @@ public sealed class DroidSynthesizer
         }
 
         // Base cutoff scales with the droid's vocal range (e.g. ~2600 Hz for R2, ~1800 Hz for Grumpy)
-        var baseCutoff = Math.Clamp(profile.MaxFreq * 1.65f, 1100f, 5200f);
+        var baseCutoff = Math.Clamp(
+            profile.MaxFreq * profile.FilterCutoffMultiplier,
+            1100f,
+            5200f);
         var maxCutoff = Math.Min(_sampleRate * 0.42f, baseCutoff * 2.6f);
 
-        // Resonance Q ≈ 1.45 gives that warm, vocal analog whistle character
-        const float damping = 1f / 1.45f;
+        // Q comes from the profile; higher values give that warm, vocal analog whistle character.
+        var damping = 1f / profile.FilterResonance;
 
         var low = 0f;
         var band = 0f;

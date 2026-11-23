@@ -207,7 +207,8 @@ public class DroidSynthesizerTests
     [Fact]
     public void WordEnvelope_AttacksOnceAndReleasesOnce()
     {
-        var synthesizer = new DroidSynthesizer(seed: 42);
+        var profile = DroidVoiceProfile.R2;
+        var synthesizer = new DroidSynthesizer(seed: 42, profile: profile);
         var plan = synthesizer.BuildPlan(TextParser.Parse("абракадабра"));
         var first = plan.Events[0];
         var last = plan.Events[^1];
@@ -219,9 +220,81 @@ public class DroidSynthesizerTests
         {
             Assert.Equal(first.WordStartSample, note.WordStartSample);
             Assert.Equal(last.WordEndSample, note.WordEndSample);
-            Assert.InRange(note.WordAttack, 0.005f, 0.016f);
-            Assert.InRange(note.WordRelease, 0.010f, 0.020f);
+            Assert.Equal(profile.AttackSeconds, note.WordAttack);
+            Assert.Equal(profile.DecaySeconds, note.WordDecay);
+            Assert.Equal(profile.SustainLevel, note.SustainLevel);
+            Assert.Equal(profile.ReleaseSeconds, note.WordRelease);
         });
+    }
+
+    [Fact]
+    public void ProfileDrivesWordEnvelope()
+    {
+        var profile = DroidVoiceProfile.R2 with
+        {
+            AttackSeconds = 0.030f,
+            DecaySeconds = 0.050f,
+            SustainLevel = 0.55f,
+            ReleaseSeconds = 0.040f,
+        };
+        var synthesizer = new DroidSynthesizer(seed: 42, profile: profile);
+        var plan = synthesizer.BuildPlan(TextParser.Parse("абракадабрабракадабра"));
+
+        Assert.NotEmpty(plan.Events);
+        Assert.All(plan.Events, note =>
+        {
+            Assert.Equal(0.030f, note.WordAttack);
+            Assert.Equal(0.050f, note.WordDecay);
+            Assert.Equal(0.55f, note.SustainLevel);
+            Assert.Equal(0.040f, note.WordRelease);
+        });
+    }
+
+    [Fact]
+    public void ShortWord_ShrinksTheProfileEnvelopeProportionally()
+    {
+        var profile = DroidVoiceProfile.R2 with
+        {
+            AttackSeconds = 0.080f,
+            DecaySeconds = 0.120f,
+            ReleaseSeconds = 0.150f,
+        };
+        var synthesizer = new DroidSynthesizer(seed: 3, profile: profile);
+        var plan = synthesizer.BuildPlan(TextParser.Parse("бип"));
+
+        var note = plan.Events[0];
+        var duration = (note.WordEndSample - note.WordStartSample) / (float)synthesizer.SampleRate;
+        var total = note.WordAttack + note.WordDecay + note.WordRelease;
+
+        Assert.Equal((double)(duration * 0.90f), (double)total, 4);
+    }
+
+    [Fact]
+    public void ZeroWhistleProbability_DisablesWhistles()
+    {
+        var profile = DroidVoiceProfile.R2 with { WhistleProbability = 0f };
+        var synthesizer = new DroidSynthesizer(seed: 12345, profile: profile);
+        var plan = synthesizer.BuildPlan(TextParser.Parse("ТРЕВОГА! Перегрев реактора!"));
+
+        Assert.Empty(plan.Whistles);
+    }
+
+    [Fact]
+    public void HigherWhistleProbability_DoesNotReduceWhistles()
+    {
+        const string text = "ТРЕВОГА! Перегрев реактора!";
+        var low = new DroidSynthesizer(
+            seed: 12345,
+            profile: DroidVoiceProfile.R2 with { WhistleProbability = 0.25f });
+        var high = new DroidSynthesizer(
+            seed: 12345,
+            profile: DroidVoiceProfile.R2 with { WhistleProbability = 1.50f });
+
+        var lowCount = low.BuildPlan(TextParser.Parse(text)).Whistles.Count;
+        var highCount = high.BuildPlan(TextParser.Parse(text)).Whistles.Count;
+
+        Assert.True(highCount > 0);
+        Assert.True(highCount >= lowCount);
     }
 
     [Fact]

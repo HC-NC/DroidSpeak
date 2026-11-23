@@ -24,7 +24,40 @@ public class DroidVoiceProfileTests
             Assert.True(profile.FmIntensity >= 0f);
             Assert.InRange(profile.ChatterProbability, 0f, 1f);
             Assert.InRange(profile.TriangleMix, 0f, 1f);
+            Assert.InRange(profile.AttackSeconds, 0.002f, 0.100f);
+            Assert.InRange(profile.DecaySeconds, 0.005f, 0.150f);
+            Assert.InRange(profile.SustainLevel, 0.10f, 1.00f);
+            Assert.InRange(profile.ReleaseSeconds, 0.005f, 0.200f);
+            Assert.InRange(profile.FilterCutoffMultiplier, 0.80f, 4.00f);
+            Assert.InRange(profile.FilterResonance, 0.50f, 4.00f);
+            Assert.InRange(profile.WhistleProbability, 0.00f, 1.50f);
         }
+    }
+
+    [Fact]
+    public void Presets_ShowcaseTheNewEnvelopeFilterAndWhistleParameters()
+    {
+        Assert.True(
+            DroidVoiceProfile.Grumpy.FilterCutoffMultiplier < DroidVoiceProfile.R2.FilterCutoffMultiplier,
+            "Grumpy should be darker than R2.");
+        Assert.True(
+            DroidVoiceProfile.Grumpy.FilterResonance > DroidVoiceProfile.R2.FilterResonance,
+            "Grumpy should have a stronger resonant peak than R2.");
+        Assert.True(
+            DroidVoiceProfile.Bass.AttackSeconds > DroidVoiceProfile.R2.AttackSeconds,
+            "Bass should have a slower attack than R2.");
+        Assert.True(
+            DroidVoiceProfile.Bass.ReleaseSeconds > DroidVoiceProfile.R2.ReleaseSeconds,
+            "Bass should have a longer release than R2.");
+        Assert.True(
+            DroidVoiceProfile.Tiny.AttackSeconds < DroidVoiceProfile.R2.AttackSeconds,
+            "Tiny should have a snappier attack than R2.");
+        Assert.True(
+            DroidVoiceProfile.Tiny.ReleaseSeconds < DroidVoiceProfile.R2.ReleaseSeconds,
+            "Tiny should have a shorter release than R2.");
+        Assert.True(
+            DroidVoiceProfile.Tiny.WhistleProbability > DroidVoiceProfile.R2.WhistleProbability,
+            "Tiny should whistle more often than R2.");
     }
 
     [Fact]
@@ -38,6 +71,13 @@ public class DroidVoiceProfileTests
             FmIntensity = 2.35f,
             ChatterProbability = 0.63f,
             TriangleMix = 0.41f,
+            AttackSeconds = 0.031f,
+            DecaySeconds = 0.044f,
+            SustainLevel = 0.55f,
+            ReleaseSeconds = 0.052f,
+            FilterCutoffMultiplier = 2.20f,
+            FilterResonance = 1.90f,
+            WhistleProbability = 1.25f,
         };
 
         var json = expected.ToJson();
@@ -56,6 +96,13 @@ public class DroidVoiceProfileTests
         Assert.Contains("\"SpeedMultiplier\"", json);
         Assert.Contains("\"ChatterProbability\"", json);
         Assert.Contains("\"TriangleMix\"", json);
+        Assert.Contains("\"AttackSeconds\"", json);
+        Assert.Contains("\"DecaySeconds\"", json);
+        Assert.Contains("\"SustainLevel\"", json);
+        Assert.Contains("\"ReleaseSeconds\"", json);
+        Assert.Contains("\"FilterCutoffMultiplier\"", json);
+        Assert.Contains("\"FilterResonance\"", json);
+        Assert.Contains("\"WhistleProbability\"", json);
 
         using var document = JsonDocument.Parse(json);
         Assert.Equal(JsonValueKind.Object, document.RootElement.ValueKind);
@@ -80,9 +127,43 @@ public class DroidVoiceProfileTests
     [InlineData("{\"MinFreq\":100,\"MaxFreq\":400,\"FmIntensity\":-1}")]
     [InlineData("{\"MinFreq\":100,\"MaxFreq\":400,\"ChatterProbability\":1.5}")]
     [InlineData("{\"MinFreq\":100,\"MaxFreq\":400,\"TriangleMix\":-0.1}")]
+    [InlineData("{\"MinFreq\":100,\"MaxFreq\":400,\"AttackSeconds\":0.001}")]
+    [InlineData("{\"MinFreq\":100,\"MaxFreq\":400,\"DecaySeconds\":0.2}")]
+    [InlineData("{\"MinFreq\":100,\"MaxFreq\":400,\"SustainLevel\":0.05}")]
+    [InlineData("{\"MinFreq\":100,\"MaxFreq\":400,\"ReleaseSeconds\":0.25}")]
+    [InlineData("{\"MinFreq\":100,\"MaxFreq\":400,\"FilterCutoffMultiplier\":0.5}")]
+    [InlineData("{\"MinFreq\":100,\"MaxFreq\":400,\"FilterResonance\":5}")]
+    [InlineData("{\"MinFreq\":100,\"MaxFreq\":400,\"WhistleProbability\":1.6}")]
+    [InlineData("{\"MinFreq\":100,\"MaxFreq\":400,\"WhistleProbability\":-0.1}")]
     public void FromJson_RejectsInvalidValues(string json)
     {
         Assert.Throws<ArgumentOutOfRangeException>(() => DroidVoiceProfile.FromJson(json));
+    }
+
+    [Fact]
+    public void FromJson_LegacyDocumentWithoutNewProperties_UsesDefaults()
+    {
+        // Profiles written before the ADSR/filter/whistle parameters existed must keep working.
+        const string legacy = """
+            {
+              "MinFreq": 220,
+              "MaxFreq": 1100,
+              "SpeedMultiplier": 0.92,
+              "FmIntensity": 1.45,
+              "ChatterProbability": 0.34,
+              "TriangleMix": 0.36
+            }
+            """;
+
+        var profile = DroidVoiceProfile.FromJson(legacy);
+
+        Assert.Equal(0.010f, profile.AttackSeconds);
+        Assert.Equal(0.022f, profile.DecaySeconds);
+        Assert.Equal(0.74f, profile.SustainLevel);
+        Assert.Equal(0.016f, profile.ReleaseSeconds);
+        Assert.Equal(1.65f, profile.FilterCutoffMultiplier);
+        Assert.Equal(1.45f, profile.FilterResonance);
+        Assert.Equal(1.00f, profile.WhistleProbability);
     }
 
     [Fact]
@@ -96,6 +177,13 @@ public class DroidVoiceProfileTests
             FmIntensity = -3f,
             ChatterProbability = 2f,
             TriangleMix = -1f,
+            AttackSeconds = 0.0001f,
+            DecaySeconds = 9f,
+            SustainLevel = -1f,
+            ReleaseSeconds = 5f,
+            FilterCutoffMultiplier = 0.1f,
+            FilterResonance = 100f,
+            WhistleProbability = 9f,
         };
 
         var normalized = wild.Normalized();
@@ -107,6 +195,38 @@ public class DroidVoiceProfileTests
         Assert.InRange(normalized.FmIntensity, 0f, 4f);
         Assert.InRange(normalized.ChatterProbability, 0f, 1f);
         Assert.InRange(normalized.TriangleMix, 0f, 1f);
+        Assert.Equal(0.002f, normalized.AttackSeconds);
+        Assert.Equal(0.150f, normalized.DecaySeconds);
+        Assert.Equal(0.10f, normalized.SustainLevel);
+        Assert.Equal(0.200f, normalized.ReleaseSeconds);
+        Assert.Equal(0.80f, normalized.FilterCutoffMultiplier);
+        Assert.Equal(4.00f, normalized.FilterResonance);
+        Assert.Equal(1.50f, normalized.WhistleProbability);
+    }
+
+    [Fact]
+    public void Normalized_ReplacesNaNWithDefaultsAndClampsInfinity()
+    {
+        var wild = new DroidVoiceProfile
+        {
+            AttackSeconds = float.NaN,
+            DecaySeconds = float.PositiveInfinity,
+            SustainLevel = float.NegativeInfinity,
+            ReleaseSeconds = float.NaN,
+            FilterCutoffMultiplier = float.PositiveInfinity,
+            FilterResonance = float.NaN,
+            WhistleProbability = float.NegativeInfinity,
+        };
+
+        var normalized = wild.Normalized();
+
+        Assert.Equal(0.010f, normalized.AttackSeconds);
+        Assert.Equal(0.150f, normalized.DecaySeconds);
+        Assert.Equal(0.10f, normalized.SustainLevel);
+        Assert.Equal(0.016f, normalized.ReleaseSeconds);
+        Assert.Equal(4.00f, normalized.FilterCutoffMultiplier);
+        Assert.Equal(1.45f, normalized.FilterResonance);
+        Assert.Equal(0.00f, normalized.WhistleProbability);
     }
 
     [Fact]
@@ -129,5 +249,27 @@ public class DroidVoiceProfileTests
         Assert.True(
             fast.GetSampleCount(text) < slow.GetSampleCount(text),
             "A faster profile should produce a shorter utterance.");
+    }
+
+    [Fact]
+    public void FilterSettings_ChangeRenderedAudio()
+    {
+        const string text = "Тревога!";
+        var dark = new DroidSynthesizer(seed: 5, profile: DroidVoiceProfile.R2 with
+        {
+            FilterCutoffMultiplier = 0.90f,
+            FilterResonance = 0.70f,
+        });
+        var bright = new DroidSynthesizer(seed: 5, profile: DroidVoiceProfile.R2 with
+        {
+            FilterCutoffMultiplier = 3.00f,
+            FilterResonance = 3.00f,
+        });
+
+        var darkAudio = dark.Synthesize(text);
+        var brightAudio = bright.Synthesize(text);
+
+        Assert.Equal(darkAudio.Length, brightAudio.Length);
+        Assert.False(darkAudio.AsSpan().SequenceEqual(brightAudio));
     }
 }

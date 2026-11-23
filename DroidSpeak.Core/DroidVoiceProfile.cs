@@ -32,6 +32,33 @@ public sealed record DroidVoiceProfile
     /// <summary>Share of the triangle wave in the carrier mix (0–1).</summary>
     public float TriangleMix { get; init; } = 0.23f;
 
+    /// <summary>Word-level ADSR attack duration in seconds (0.002–0.100).</summary>
+    public float AttackSeconds { get; init; } = 0.010f;
+
+    /// <summary>Word-level ADSR decay duration in seconds (0.005–0.150).</summary>
+    public float DecaySeconds { get; init; } = 0.022f;
+
+    /// <summary>Word-level ADSR sustain gain (0.10–1.00).</summary>
+    public float SustainLevel { get; init; } = 0.74f;
+
+    /// <summary>Word-level ADSR release duration in seconds (0.005–0.200).</summary>
+    public float ReleaseSeconds { get; init; } = 0.016f;
+
+    /// <summary>
+    /// Base cutoff multiplier for the dynamic resonant low-pass filter, relative to
+    /// <see cref="MaxFreq"/> (0.80–4.00). Higher values keep the voice brighter.
+    /// </summary>
+    public float FilterCutoffMultiplier { get; init; } = 1.65f;
+
+    /// <summary>Q factor of the resonant low-pass filter (0.50–4.00).</summary>
+    public float FilterResonance { get; init; } = 1.45f;
+
+    /// <summary>
+    /// Multiplier for the chance of stressed / emotional whistles (0.00–1.50).
+    /// <c>0</c> disables whistles completely.
+    /// </summary>
+    public float WhistleProbability { get; init; } = 1.00f;
+
     /// <summary>Classic bright astromech, the default voice.</summary>
     public static DroidVoiceProfile R2 { get; } = new();
 
@@ -44,6 +71,9 @@ public sealed record DroidVoiceProfile
         FmIntensity = 1.45f,
         ChatterProbability = 0.34f,
         TriangleMix = 0.36f,
+        // Darker and more nasal: a lower cutoff with a stronger resonant peak.
+        FilterCutoffMultiplier = 1.35f,
+        FilterResonance = 1.85f,
     };
 
     /// <summary>Heavy, bass-heavy droid with a slow, deliberate cadence.</summary>
@@ -55,6 +85,9 @@ public sealed record DroidVoiceProfile
         FmIntensity = 1.20f,
         ChatterProbability = 0.26f,
         TriangleMix = 0.30f,
+        // Slow, deliberate swells with a long tail.
+        AttackSeconds = 0.020f,
+        ReleaseSeconds = 0.030f,
     };
 
     /// <summary>Very fast, high-pitched chatterbox.</summary>
@@ -66,6 +99,10 @@ public sealed record DroidVoiceProfile
         FmIntensity = 1.10f,
         ChatterProbability = 0.78f,
         TriangleMix = 0.16f,
+        // Snappy attacks, short releases and extra whistles.
+        AttackSeconds = 0.006f,
+        ReleaseSeconds = 0.009f,
+        WhistleProbability = 1.30f,
     };
 
     /// <summary>Serializes this profile to JSON using a source-generated contract.</summary>
@@ -74,6 +111,8 @@ public sealed record DroidVoiceProfile
 
     /// <summary>
     /// Deserializes a profile from JSON using a source-generated contract and validates it.
+    /// Properties missing from the document keep their default values, so profiles written by
+    /// older versions of the library continue to load unchanged.
     /// </summary>
     /// <exception cref="JsonException">The JSON is malformed or does not describe a profile.</exception>
     /// <exception cref="ArgumentOutOfRangeException">A numeric value is outside its allowed range.</exception>
@@ -81,10 +120,28 @@ public sealed record DroidVoiceProfile
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(json);
 
-        var profile = JsonSerializer.Deserialize(
+        var model = JsonSerializer.Deserialize(
                 json,
-                DroidVoiceProfileJsonContext.Default.DroidVoiceProfile)
+                DroidVoiceProfileJsonContext.Default.DroidVoiceProfileJsonModel)
             ?? throw new JsonException("The JSON document does not contain a voice profile.");
+
+        var defaults = new DroidVoiceProfile();
+        var profile = new DroidVoiceProfile
+        {
+            MinFreq = model.MinFreq ?? defaults.MinFreq,
+            MaxFreq = model.MaxFreq ?? defaults.MaxFreq,
+            SpeedMultiplier = model.SpeedMultiplier ?? defaults.SpeedMultiplier,
+            FmIntensity = model.FmIntensity ?? defaults.FmIntensity,
+            ChatterProbability = model.ChatterProbability ?? defaults.ChatterProbability,
+            TriangleMix = model.TriangleMix ?? defaults.TriangleMix,
+            AttackSeconds = model.AttackSeconds ?? defaults.AttackSeconds,
+            DecaySeconds = model.DecaySeconds ?? defaults.DecaySeconds,
+            SustainLevel = model.SustainLevel ?? defaults.SustainLevel,
+            ReleaseSeconds = model.ReleaseSeconds ?? defaults.ReleaseSeconds,
+            FilterCutoffMultiplier = model.FilterCutoffMultiplier ?? defaults.FilterCutoffMultiplier,
+            FilterResonance = model.FilterResonance ?? defaults.FilterResonance,
+            WhistleProbability = model.WhistleProbability ?? defaults.WhistleProbability,
+        };
 
         profile.Validate();
         return profile;
@@ -104,8 +161,19 @@ public sealed record DroidVoiceProfile
             FmIntensity = Math.Clamp(FmIntensity, 0f, 4f),
             ChatterProbability = Math.Clamp(ChatterProbability, 0f, 1f),
             TriangleMix = Math.Clamp(TriangleMix, 0f, 1f),
+            AttackSeconds = ClampFinite(AttackSeconds, 0.002f, 0.100f, 0.010f),
+            DecaySeconds = ClampFinite(DecaySeconds, 0.005f, 0.150f, 0.022f),
+            SustainLevel = ClampFinite(SustainLevel, 0.10f, 1.00f, 0.74f),
+            ReleaseSeconds = ClampFinite(ReleaseSeconds, 0.005f, 0.200f, 0.016f),
+            FilterCutoffMultiplier = ClampFinite(FilterCutoffMultiplier, 0.80f, 4.00f, 1.65f),
+            FilterResonance = ClampFinite(FilterResonance, 0.50f, 4.00f, 1.45f),
+            WhistleProbability = ClampFinite(WhistleProbability, 0.00f, 1.50f, 1.00f),
         };
     }
+
+    private static float ClampFinite(float value, float min, float max, float fallback) =>
+        // ±Infinity is clamped to the nearest bound; NaN falls back to the property default.
+        float.IsNaN(value) ? fallback : Math.Clamp(value, min, max);
 
     private void Validate()
     {
@@ -150,11 +218,67 @@ public sealed record DroidVoiceProfile
                 TriangleMix,
                 "TriangleMix must be between 0 and 1.");
         }
+
+        ValidateRange(AttackSeconds, 0.002f, 0.100f, nameof(AttackSeconds));
+        ValidateRange(DecaySeconds, 0.005f, 0.150f, nameof(DecaySeconds));
+        ValidateRange(SustainLevel, 0.10f, 1.00f, nameof(SustainLevel));
+        ValidateRange(ReleaseSeconds, 0.005f, 0.200f, nameof(ReleaseSeconds));
+        ValidateRange(FilterCutoffMultiplier, 0.80f, 4.00f, nameof(FilterCutoffMultiplier));
+        ValidateRange(FilterResonance, 0.50f, 4.00f, nameof(FilterResonance));
+        ValidateRange(WhistleProbability, 0.00f, 1.50f, nameof(WhistleProbability));
+    }
+
+    private static void ValidateRange(float value, float min, float max, string name)
+    {
+        // NaN fails both comparisons and is rejected too.
+        if (!(value >= min && value <= max))
+        {
+            throw new ArgumentOutOfRangeException(
+                name,
+                value,
+                $"{name} must be between {min} and {max}.");
+        }
     }
 }
 
 [JsonSourceGenerationOptions(WriteIndented = true)]
 [JsonSerializable(typeof(DroidVoiceProfile))]
+[JsonSerializable(typeof(DroidVoiceProfileJsonModel))]
 internal sealed partial class DroidVoiceProfileJsonContext : JsonSerializerContext
 {
+}
+
+/// <summary>
+/// Nullable mirror of <see cref="DroidVoiceProfile"/> used for deserialization. Source-generated
+/// deserializers pass <c>default</c> for missing members, which would silently zero out
+/// properties that were added after the JSON was written; nullable members let the caller apply
+/// the real defaults instead.
+/// </summary>
+internal sealed class DroidVoiceProfileJsonModel
+{
+    public float? MinFreq { get; init; }
+
+    public float? MaxFreq { get; init; }
+
+    public float? SpeedMultiplier { get; init; }
+
+    public float? FmIntensity { get; init; }
+
+    public float? ChatterProbability { get; init; }
+
+    public float? TriangleMix { get; init; }
+
+    public float? AttackSeconds { get; init; }
+
+    public float? DecaySeconds { get; init; }
+
+    public float? SustainLevel { get; init; }
+
+    public float? ReleaseSeconds { get; init; }
+
+    public float? FilterCutoffMultiplier { get; init; }
+
+    public float? FilterResonance { get; init; }
+
+    public float? WhistleProbability { get; init; }
 }

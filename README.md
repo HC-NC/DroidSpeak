@@ -164,6 +164,24 @@ DroidVoiceProfile loaded = DroidVoiceProfile.FromJson(json);
 | **`Bass`** | 120 | 650 | 0.82 | 1.20 | 0.26 | 0.30 |
 | **`Tiny`** | 600 | 2400 | 1.38 | 1.10 | 0.78 | 0.16 |
 
+The word-level ADSR envelope, the dynamic resonant low-pass filter and the whistle intensity are
+profile-driven too. Documents written by older versions that omit these fields keep the defaults:
+
+| Parameter | Default | Range | Effect |
+| :--- | :---: | :---: | :--- |
+| `AttackSeconds` | 0.010 | 0.002–0.100 | Word-level ADSR attack |
+| `DecaySeconds` | 0.022 | 0.005–0.150 | Word-level ADSR decay |
+| `SustainLevel` | 0.74 | 0.10–1.00 | Word-level sustain gain |
+| `ReleaseSeconds` | 0.016 | 0.005–0.200 | Word-level ADSR release |
+| `FilterCutoffMultiplier` | 1.65 | 0.80–4.00 | Base cutoff relative to `MaxFreq` |
+| `FilterResonance` | 1.45 | 0.50–4.00 | Q of the resonant low-pass |
+| `WhistleProbability` | 1.00 | 0.00–1.50 | Whistle chance multiplier (`0` disables whistles) |
+
+Preset highlights: `Grumpy` uses a lower cutoff with a stronger resonant peak, `Bass` has a slower
+attack and a longer release, and `Tiny` has snappier envelopes plus extra whistles. If a word is
+too short to fit the requested attack, decay and release, the envelope is scaled down
+proportionally.
+
 ### Music & Melodies (`DroidSpeak.Music`)
 
 Render Standard MIDI files (`.mid`) or RTTTL ringtone strings using any droid voice profile:
