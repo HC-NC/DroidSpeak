@@ -8,10 +8,14 @@
 		<AssemblyName>DroidSpeak.Core</AssemblyName>
 
 		<PackageId>DroidSpeak.Core</PackageId>
-		<Description>Zero-dependency, NativeAOT-compatible C# library for procedural synthesis of expressive astromech-style droid speech and acoustic steganography.</Description>
-		<PackageTags>audio;dsp;synth;tts;droid;r2d2;fsk;modem;procedural;gamedev</PackageTags>
+		<Description>Zero-dependency, NativeAOT-compatible C# library for procedural synthesis of expressive astromech-style droid speech, polyphonic MIDI/RTTTL music, real-time audio streaming, and FSK acoustic steganography.</Description>
+		<PackageTags>audio;dsp;synth;tts;droid;r2d2;midi;rtttl;streaming;fsk;modem;procedural;gamedev</PackageTags>
 		<PackageLicenseExpression>MIT</PackageLicenseExpression>
 		<PackageReadmeFile>README.md</PackageReadmeFile>
+		<GenerateDocumentationFile>true</GenerateDocumentationFile>
+		<NoWarn>$(NoWarn);CS1591</NoWarn>
+		<IncludeSymbols>true</IncludeSymbols>
+		<SymbolPackageFormat>snupkg</SymbolPackageFormat>
 	</PropertyGroup>
 
 	<ItemGroup>

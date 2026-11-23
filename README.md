@@ -1,7 +1,7 @@
 # DroidSpeak
 
+[![NuGet Version](https://img.shields.io/nuget/v/DroidSpeak.Core?style=flat&logo=nuget&label=NuGet)](https://nuget.org/packages/DroidSpeak.Core)
 [![GitHub Actions Workflow Status](https://img.shields.io/github/actions/workflow/status/HC-NC/DroidSpeak/release.yml)](https://github.com/HC-NC/DroidSpeak/actions)
-[![GitHub Release](https://img.shields.io/github/v/release/HC-NC/DroidSpeak)](https://github.com/HC-NC/DroidSpeak/releases/latest)
 [![MIT License](https://img.shields.io/github/license/HC-NC/DroidSpeak)](LICENSE)
 [![GitHub code size in bytes](https://img.shields.io/github/languages/code-size/HC-NC/DroidSpeak)](#project-structure)
 [![.NET](https://img.shields.io/badge/.NET-10.0-512BD4)](https://dotnet.microsoft.com)
