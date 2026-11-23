@@ -256,7 +256,7 @@
 						width="1200"
 						height="300">
 				</canvas>
-				<audio id="ds-audio-player" controls autoplay src="@AudioUrl" class="ds-audio"></audio>
+				<audio id="ds-audio-player" controls autoplay="@_autoplayPlayer" onplay="window.droidAudio.stopLiveStream()" src="@AudioUrl" class="ds-audio"></audio>
 				<button class="ds-btn" @onclick="DownloadLastWav">⬇ Download .WAV</button>
 			</div>
 		}
@@ -311,6 +311,7 @@
 	private int CustomFilterResonancePct { get; set; } = 145;
 	private int CustomWhistlePct { get; set; } = 100;
 	private string _lastPresetKey = "r2";
+	private bool _autoplayPlayer = true;
 
 	private string SpeechText { get; set; } = "Beep-beep! Hello there, systems are online!";
 	private string RtttlInput { get; set; } = "OdeToJoy:d=4,o=5,b=125:e,e,f,g,g,f,e,d,c,c,d,e,e.,8d,2d";
@@ -463,14 +464,21 @@
 		try
 		{
 			var synth = new DroidSynthesizer(profile: BuildActiveProfile());
-			var samples = synth.Synthesize(SpeechText);
+			var stream = synth.CreateStream(SpeechText);
 
 			var phrases = TextParser.Parse(SpeechText);
 			var info = phrases.Count > 0
 				? $"Valence={phrases.Average(p => p.Emotion.Valence):0.00}, Arousal={phrases.Average(p => p.Emotion.Arousal):0.00}"
 				: "Rendered";
 
-			await LoadIntoPlayer(samples, synth.SampleRate, "droid_speech.wav", info);
+			await StreamIntoPlayerAsync(
+				stream.SampleRate,
+				stream.TotalSamples,
+				buffer => stream.Read(buffer),
+				() => stream.Position,
+				"droid_speech.wav",
+				info,
+				"Streaming speech...");
 		}
 		catch (Exception ex)
 		{
@@ -518,6 +526,63 @@
 		await Task.Delay(16); // Yield 1 animation frame (16ms) so the browser repaints the progress bar
 	}
 
+	/// <summary>
+	/// Streams a rendered utterance straight to the browser: each chunk is queued on a Web Audio
+	/// graph as soon as it is synthesized, so playback starts before the whole buffer exists.
+	/// When rendering finishes, the full WAV is attached to the &lt;audio&gt; element (without
+	/// autoplay) so it can be replayed, seeked or downloaded.
+	/// </summary>
+	private async Task StreamIntoPlayerAsync(
+		int sampleRate,
+		int totalSamples,
+		Func<float[], int> read,
+		Func<int> position,
+		string wavName,
+		string details,
+		string progressLabel)
+	{
+		// The spectrum canvas only exists once the player box is rendered, so make it visible
+		// first and give Blazor a frame to mount it before starting the live stream.
+		if (string.IsNullOrEmpty(AudioUrl))
+		{
+			AudioUrl = "about:blank";
+			_spectrumAttachedUrl = AudioUrl;
+			StateHasChanged();
+			await Task.Delay(50);
+		}
+
+		var finalBuffer = new float[totalSamples];
+		var chunkSize = Math.Max(1, sampleRate / 2);
+		var buffer = new float[chunkSize];
+		var offset = 0;
+
+		await StepProgressAsync(1, progressLabel);
+		await JS.InvokeVoidAsync("droidAudio.startLiveStream", "ds-spectrum-canvas");
+
+		while (offset < totalSamples)
+		{
+			var written = read(buffer);
+			if (written <= 0)
+			{
+				break;
+			}
+
+			var chunk = buffer.AsSpan(0, written);
+			chunk.CopyTo(finalBuffer.AsSpan(offset));
+			offset += written;
+
+			// Play this chunk immediately while the remaining audio is still being rendered.
+			await JS.InvokeVoidAsync("droidAudio.enqueueStreamChunk", chunk.ToArray(), sampleRate);
+
+			var percent = (int)(100.0 * position() / totalSamples);
+			await StepProgressAsync(percent, $"{progressLabel} {percent}%");
+		}
+
+		// The live graph already played this audio; attach the finished WAV without autoplay.
+		_autoplayPlayer = false;
+		await LoadIntoPlayer(finalBuffer, sampleRate, wavName, details);
+	}
+
 	private async Task<byte[]> ReadBrowserFileWithProgressAsync(IBrowserFile file, long maxAllowedSize, int startPct, int endPct)
 	{
 		using var stream = file.OpenReadStream(maxAllowedSize);
@@ -544,60 +609,20 @@
 	{
 		var profile = BuildActiveProfile();
 		var musicSynth = new DroidMusicSynthesizer(profile: profile);
-		int totalSamples = musicSynth.GetSampleCount(score);
-		var finalBuffer = new float[totalSamples];
+		var stream = musicSynth.CreateStream(score, profile, SoloMelodyOnly);
 
-		// Render in time windows (chunks of ~2.5 seconds) so we allocate only a tiny slice per step
-		int chunkSamples = musicSynth.SampleRate * 2;
 		int totalNotes = score.Notes.Count;
-
-		if (totalSamples <= chunkSamples || totalNotes <= 80)
-		{
-			await StepProgressAsync(65, $"Synthesizing {totalNotes} notes...");
-			musicSynth.Render(score, finalBuffer, soloMelodyOnly: SoloMelodyOnly);
-		}
-		else
-		{
-			// Render by note batches into small window slices instead of cloning the full buffer
-			const int batchSize = 150;
-			var batchList = new List<ScoreNote>(batchSize);
-			var scratch = new float[totalSamples];
-
-			for (int offset = 0; offset < totalNotes; offset += batchSize)
-			{
-				batchList.Clear();
-				int count = Math.Min(batchSize, totalNotes - offset);
-				float maxEndSec = 0f;
-
-				for (int k = 0; k < count; k++)
-				{
-					var note = score.Notes[offset + k];
-					batchList.Add(note);
-					var end = note.StartSeconds + note.DurationSeconds;
-					if (end > maxEndSec) maxEndSec = end;
-				}
-
-				var batchScore = new DroidScore(batchList, score.Title);
-				int sliceLen = Math.Min(totalSamples, musicSynth.GetSampleCount(batchScore));
-				var slice = scratch.AsSpan(0, sliceLen);
-
-				musicSynth.Render(batchScore, slice, soloMelodyOnly: SoloMelodyOnly);
-
-				for (int i = 0; i < sliceLen; i++)
-				{
-					finalBuffer[i] = Math.Clamp(finalBuffer[i] + slice[i], -1f, 1f);
-				}
-
-				int pct = 30 + (int)(65.0 * (offset + count) / totalNotes);
-				await StepProgressAsync(pct, $"Rendering notes: {offset + count} / {totalNotes}...");
-			}
-		}
-
-		await StepProgressAsync(98, "Encoding WAV...");
-
 		var title = string.IsNullOrWhiteSpace(score.Title) ? (fallbackTitle ?? "Melody") : score.Title;
 		var extra = $"'{title}' · {totalNotes} notes{(SoloMelodyOnly ? " · solo" : "")}";
-		await LoadIntoPlayer(finalBuffer, musicSynth.SampleRate, wavName, extra);
+
+		await StreamIntoPlayerAsync(
+			stream.SampleRate,
+			stream.TotalSamples,
+			buffer => stream.Read(buffer),
+			() => stream.Position,
+			wavName,
+			extra,
+			$"Streaming {totalNotes} notes...");
 	}
 
 	private async Task HandleWavDecodeUpload(InputFileChangeEventArgs e)
@@ -687,6 +712,7 @@
 			var mixed = DroidModemEncoder.EncodeIntoSpeech(ModemText, speech, synth.SampleRate);
 
 			DecodedResult = DroidModemDecoder.Decode(mixed, synth.SampleRate) ?? "<self-check decode failed>";
+			_autoplayPlayer = true;
 			await LoadIntoPlayer(mixed, synth.SampleRate, "droid_transmit.wav", "FSK Stego Ready");
 		}
 		catch (Exception ex)
@@ -701,6 +727,13 @@
 
 	private async Task LoadIntoPlayer(float[] samples, int sampleRate, string fileName, string details)
 	{
+		// When the <audio> element autoplays, it becomes the playback source: silence any live
+		// Web Audio chunks first so the two never play on top of each other.
+		if (_autoplayPlayer)
+		{
+			await JS.InvokeVoidAsync("droidAudio.stopLiveStream");
+		}
+
 		LastSamples = samples;
 		LastSampleRate = sampleRate;
 		LastFileName = fileName;

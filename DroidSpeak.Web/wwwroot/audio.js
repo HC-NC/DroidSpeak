@@ -66,6 +66,107 @@
         return new Blob([buffer], { type: 'audio/wav' });
     },
 
+    // ---- Real-time Web Audio chunked stream player ----
+    streamCtx: null,
+    streamAnalyser: null,
+    streamNextTime: 0,
+    streamSources: [],
+    liveVisState: null,
+
+    startLiveStream: function (canvasElementId) {
+        this.stopLiveStream();
+
+        const AudioCtor = window.AudioContext || window.webkitAudioContext;
+        if (!AudioCtor) return;
+
+        // The live graph owns playback while streaming: never let the <audio> element double up.
+        const player = document.getElementById('ds-audio-player');
+        if (player && !player.paused) {
+            player.pause();
+        }
+
+        if (!this.streamCtx || this.streamCtx.state === 'closed') {
+            this.streamCtx = new AudioCtor();
+            this.streamAnalyser = this.streamCtx.createAnalyser();
+            this.streamAnalyser.fftSize = 2048;
+            this.streamAnalyser.smoothingTimeConstant = 0.25;
+            this.streamAnalyser.connect(this.streamCtx.destination);
+        }
+
+        if (this.streamCtx.state === 'suspended') {
+            this.streamCtx.resume();
+        }
+
+        // Small scheduling lead so the first chunk is never late.
+        this.streamNextTime = this.streamCtx.currentTime + 0.04;
+
+        const canvas = document.getElementById(canvasElementId);
+        if (canvas && this.streamAnalyser) {
+            const state = {
+                ctx: this.streamCtx,
+                analyser: this.streamAnalyser,
+                audio: { paused: false, ended: false },
+                canvas: canvas,
+                bins: new Uint8Array(this.streamAnalyser.frequencyBinCount),
+                frame: 0,
+                running: false
+            };
+            this.liveVisState = state;
+            this.startSpectrum(state);
+        }
+    },
+
+    enqueueStreamChunk: function (samples, sampleRate) {
+        if (!this.streamCtx || !samples || samples.length === 0 || !sampleRate) return;
+
+        if (this.streamCtx.state === 'suspended') {
+            this.streamCtx.resume();
+        }
+
+        const buffer = this.streamCtx.createBuffer(1, samples.length, sampleRate);
+        buffer.getChannelData(0).set(samples);
+
+        const src = this.streamCtx.createBufferSource();
+        src.buffer = buffer;
+        src.connect(this.streamAnalyser);
+
+        // Schedule gaplessly: each chunk starts where the previous one ends.
+        const now = this.streamCtx.currentTime;
+        if (this.streamNextTime < now) {
+            this.streamNextTime = now + 0.01;
+        }
+
+        src.start(this.streamNextTime);
+        this.streamNextTime += buffer.duration;
+        this.streamSources.push(src);
+
+        // Production outran playback, or a chunk arrived after a gap: keep the visualizer alive.
+        if (this.liveVisState) {
+            this.liveVisState.audio.ended = false;
+            this.startSpectrum(this.liveVisState);
+        }
+
+        src.onended = () => {
+            const idx = this.streamSources.indexOf(src);
+            if (idx >= 0) this.streamSources.splice(idx, 1);
+            if (this.streamSources.length === 0 && this.liveVisState) {
+                this.liveVisState.audio.ended = true;
+            }
+        };
+    },
+
+    stopLiveStream: function () {
+        for (const src of this.streamSources) {
+            try { src.stop(); } catch (_) { }
+        }
+        this.streamSources = [];
+        this.streamNextTime = 0;
+        if (this.liveVisState) {
+            this.stopSpectrum(this.liveVisState);
+            this.liveVisState = null;
+        }
+    },
+
     // ---- Real-time spectrum & spectrogram visualizer (Web Audio API) ----
 
     spectrumBars: 48,

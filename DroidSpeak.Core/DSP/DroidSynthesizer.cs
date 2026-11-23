@@ -68,6 +68,27 @@ public sealed class DroidSynthesizer
         return Synthesize(TextParser.Parse(text), profile);
     }
 
+    /// <summary>
+    /// Creates a real-time pull stream that synthesizes <paramref name="text"/> in arbitrary chunks
+    /// without allocating a full utterance buffer upfront.
+    /// </summary>
+    public DroidSpeechStream CreateStream(string text, DroidVoiceProfile? profile = null)
+    {
+        ArgumentNullException.ThrowIfNull(text);
+        return CreateStream(TextParser.Parse(text), profile);
+    }
+
+    /// <summary>
+    /// Creates a real-time pull stream from already parsed <paramref name="phrases"/>.
+    /// </summary>
+    public DroidSpeechStream CreateStream(IReadOnlyList<Phrase> phrases, DroidVoiceProfile? profile = null)
+    {
+        ArgumentNullException.ThrowIfNull(phrases);
+        var activeProfile = (profile ?? _profile).Normalized();
+        var plan = BuildPlan(phrases, activeProfile);
+        return new DroidSpeechStream(this, plan, activeProfile);
+    }
+
     /// <summary>Synthesizes already parsed phrases into a newly allocated mono buffer.</summary>
     /// <param name="phrases">Parsed phrases.</param>
     /// <param name="profile">Optional voice profile override. Defaults to the synthesizer profile.</param>

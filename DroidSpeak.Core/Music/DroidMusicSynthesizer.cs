@@ -163,7 +163,127 @@ namespace DroidSpeak.Music
             return count;
         }
 
-        private static bool[] ClassifyLeadNotes(IReadOnlyList<ScoreNote> notes)
+        /// <summary>
+        /// Creates a real-time pull stream that renders <paramref name="score"/> in arbitrary chunks
+        /// without allocating a full-score buffer. Lead notes, glide-from pitches and per-note
+        /// synthesis parameters are resolved once, here, at creation time.
+        /// </summary>
+        public DroidMusicStream CreateStream(
+            DroidScore score,
+            DroidVoiceProfile? profile = null,
+            bool soloMelodyOnly = false)
+        {
+            ArgumentNullException.ThrowIfNull(score);
+
+            var activeProfile = (profile ?? _profile).Normalized();
+            var totalSamples = GetSampleCount(score, activeProfile);
+            if (totalSamples == 0)
+            {
+                return new DroidMusicStream(
+                    _sampleRate,
+                    0,
+                    activeProfile,
+                    [],
+                    []);
+            }
+
+            var speed = activeProfile.SpeedMultiplier;
+            var isLeadFlags = ClassifyLeadNotes(score.Notes);
+            var notes = new List<DroidMusicStream.NoteInfo>(score.Notes.Count);
+
+            float? prevLeadFreq = null;
+            float prevLeadEndSec = -10f;
+            uint seedCounter = 1u;
+
+            for (int i = 0; i < score.Notes.Count; i++)
+            {
+                var note = score.Notes[i];
+                var startSec = note.StartSeconds / speed;
+                var durationSec = note.DurationSeconds / speed;
+
+                var startSample = Math.Max(0, (int)MathF.Round(startSec * _sampleRate));
+                if (startSample >= totalSamples)
+                {
+                    continue;
+                }
+
+                var noteLength = Math.Max(1, (int)MathF.Round(durationSec * _sampleRate));
+                var length = Math.Min(noteLength, totalSamples - startSample);
+
+                if (note.IsPercussion || note.FrequencyHz <= 0f)
+                {
+                    if (!soloMelodyOnly)
+                    {
+                        notes.Add(DroidMusicStream.BuildNoteInfo(
+                            note,
+                            startSample,
+                            length,
+                            isLead: false,
+                            glideFrom: null,
+                            seed: seedCounter++,
+                            activeProfile,
+                            _sampleRate));
+                    }
+
+                    continue;
+                }
+
+                var freq = FitFrequencyToProfile(note.FrequencyHz, activeProfile);
+                bool isLead = isLeadFlags[i];
+
+                if (isLead)
+                {
+                    // Portamento glide only when the previous lead note is close enough in time.
+                    float? glideFrom = (prevLeadFreq.HasValue && (startSec - prevLeadEndSec) < 0.09f)
+                        ? prevLeadFreq.Value
+                        : null;
+
+                    notes.Add(DroidMusicStream.BuildNoteInfo(
+                        note,
+                        startSample,
+                        length,
+                        isLead: true,
+                        glideFrom,
+                        seedCounter++,
+                        activeProfile,
+                        _sampleRate));
+
+                    prevLeadFreq = freq;
+                    prevLeadEndSec = startSec + durationSec;
+                }
+                else if (!soloMelodyOnly)
+                {
+                    notes.Add(DroidMusicStream.BuildNoteInfo(
+                        note,
+                        startSample,
+                        length,
+                        isLead: false,
+                        glideFrom: null,
+                        seed: 0u,
+                        activeProfile,
+                        _sampleRate));
+                }
+            }
+
+            var noteArray = notes.ToArray();
+
+            // Render order (by start sample) lets Read stop scanning as soon as it passes the window.
+            var order = new int[noteArray.Length];
+            for (var i = 0; i < order.Length; i++)
+            {
+                order[i] = i;
+            }
+
+            Array.Sort(order, (a, b) =>
+            {
+                var byStart = noteArray[a].StartSample.CompareTo(noteArray[b].StartSample);
+                return byStart != 0 ? byStart : a.CompareTo(b);
+            });
+
+            return new DroidMusicStream(_sampleRate, totalSamples, activeProfile, noteArray, order);
+        }
+
+        internal static bool[] ClassifyLeadNotes(IReadOnlyList<ScoreNote> notes)
         {
             var flags = new bool[notes.Count];
             for (int i = 0; i < notes.Count; i++)
@@ -381,7 +501,7 @@ namespace DroidSpeak.Music
                 target[n] += sample;
             }
         }
-        private static float FitFrequencyToProfile(float freq, DroidVoiceProfile profile)
+        internal static float FitFrequencyToProfile(float freq, DroidVoiceProfile profile)
         {
             var minAllowed = profile.MinFreq * 0.65f;
             var maxAllowed = profile.MaxFreq * 1.45f;
