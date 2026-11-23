@@ -254,6 +254,19 @@ input[type="range"] {
         color: var(--text);
     }
 
+.ds-slider-group + .ds-slider-group {
+    margin-top: 1rem;
+}
+
+.ds-slider-group-title {
+    font-size: 0.7rem;
+    font-weight: 700;
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin-bottom: 0.5rem;
+}
+
 .ds-tabs {
     display: flex;
     gap: 0.5rem;

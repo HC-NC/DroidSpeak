@@ -47,38 +47,77 @@
         @if (ShowCustomizer)
         {
             <div class="ds-customizer">
-                <div class="ds-sliders">
-                    <label>
-                        Min Freq: <strong>@CustomMinFreq Hz</strong>
-                        <input type="range" min="80" max="1000" step="10" @bind="CustomMinFreq" @bind:event="oninput" @onchange="MarkCustom" />
-                    </label>
-                    <label>
-                        Max Freq: <strong>@CustomMaxFreq Hz</strong>
-                        <input type="range" min="400" max="3200" step="20" @bind="CustomMaxFreq" @bind:event="oninput" @onchange="MarkCustom" />
-                    </label>
-                    <label>
-                        Speed: <strong>@((CustomSpeedPct / 100f).ToString("0.00", CultureInfo.InvariantCulture))x</strong>
-                        <input type="range" min="50" max="200" step="5" @bind="CustomSpeedPct" @bind:event="oninput" @onchange="MarkCustom" />
-                    </label>
-                    <label>
-                        FM Intensity: <strong>@((CustomFmPct / 100f).ToString("0.00", CultureInfo.InvariantCulture))</strong>
-                        <input type="range" min="10" max="250" step="5" @bind="CustomFmPct" @bind:event="oninput" @onchange="MarkCustom" />
-                    </label>
-                    <label>
-                        Chatter / Trills: <strong>@CustomChatterPct%</strong>
-                        <input type="range" min="0" max="100" step="5" @bind="CustomChatterPct" @bind:event="oninput" @onchange="MarkCustom" />
-                    </label>
-                    <label>
-                        Triangle Mix: <strong>@CustomTrianglePct%</strong>
-                        <input type="range" min="0" max="60" step="2" @bind="CustomTrianglePct" @bind:event="oninput" @onchange="MarkCustom" />
-                    </label>
+                <div class="ds-slider-group">
+                    <div class="ds-slider-group-title">Pitch &amp; Timbre</div>
+                    <div class="ds-sliders">
+                        <label>
+                            Min Freq: <strong>@CustomMinFreq Hz</strong>
+                            <input type="range" min="80" max="1000" step="10" @bind="CustomMinFreq" @bind:event="oninput" @onchange="MarkCustom" />
+                        </label>
+                        <label>
+                            Max Freq: <strong>@CustomMaxFreq Hz</strong>
+                            <input type="range" min="400" max="3200" step="20" @bind="CustomMaxFreq" @bind:event="oninput" @onchange="MarkCustom" />
+                        </label>
+                        <label>
+                            Speed: <strong>@((CustomSpeedPct / 100f).ToString("0.00", CultureInfo.InvariantCulture))x</strong>
+                            <input type="range" min="50" max="200" step="5" @bind="CustomSpeedPct" @bind:event="oninput" @onchange="MarkCustom" />
+                        </label>
+                        <label>
+                            FM Intensity: <strong>@((CustomFmPct / 100f).ToString("0.00", CultureInfo.InvariantCulture))</strong>
+                            <input type="range" min="10" max="250" step="5" @bind="CustomFmPct" @bind:event="oninput" @onchange="MarkCustom" />
+                        </label>
+                        <label>
+                            Chatter / Trills: <strong>@CustomChatterPct%</strong>
+                            <input type="range" min="0" max="100" step="5" @bind="CustomChatterPct" @bind:event="oninput" @onchange="MarkCustom" />
+                        </label>
+                        <label>
+                            Triangle Mix: <strong>@CustomTrianglePct%</strong>
+                            <input type="range" min="0" max="60" step="2" @bind="CustomTrianglePct" @bind:event="oninput" @onchange="MarkCustom" />
+                        </label>
+                    </div>
                 </div>
+
+                <div class="ds-slider-group">
+                    <div class="ds-slider-group-title">Envelope &amp; Resonant Filter</div>
+                    <div class="ds-sliders">
+                        <label>
+                            Attack: <strong>@CustomAttackMs ms</strong>
+                            <input type="range" min="2" max="100" step="1" @bind="CustomAttackMs" @bind:event="oninput" @onchange="MarkCustom" />
+                        </label>
+                        <label>
+                            Decay: <strong>@CustomDecayMs ms</strong>
+                            <input type="range" min="5" max="150" step="5" @bind="CustomDecayMs" @bind:event="oninput" @onchange="MarkCustom" />
+                        </label>
+                        <label>
+                            Sustain: <strong>@CustomSustainPct%</strong>
+                            <input type="range" min="10" max="100" step="5" @bind="CustomSustainPct" @bind:event="oninput" @onchange="MarkCustom" />
+                        </label>
+                        <label>
+                            Release: <strong>@CustomReleaseMs ms</strong>
+                            <input type="range" min="5" max="200" step="5" @bind="CustomReleaseMs" @bind:event="oninput" @onchange="MarkCustom" />
+                        </label>
+                        <label>
+                            Filter Cutoff: <strong>@((CustomFilterCutoffPct / 100f).ToString("0.00", CultureInfo.InvariantCulture))x</strong>
+                            <input type="range" min="80" max="400" step="5" @bind="CustomFilterCutoffPct" @bind:event="oninput" @onchange="MarkCustom" />
+                        </label>
+                        <label>
+                            Filter Resonance Q: <strong>@((CustomFilterResonancePct / 100f).ToString("0.00", CultureInfo.InvariantCulture))</strong>
+                            <input type="range" min="50" max="400" step="5" @bind="CustomFilterResonancePct" @bind:event="oninput" @onchange="MarkCustom" />
+                        </label>
+                        <label>
+                            Whistle Chance: <strong>@CustomWhistlePct%</strong>
+                            <input type="range" min="0" max="150" step="5" @bind="CustomWhistlePct" @bind:event="oninput" @onchange="MarkCustom" />
+                        </label>
+                    </div>
+                </div>
+
                 <div class="ds-actions" style="margin-top:0.75rem">
                     <button class="ds-chip" @onclick="ExportProfileJson">⬇ Download Profile (.json)</button>
                     <label class="ds-chip">
                         📂 Import Profile (.json)
                         <InputFile OnChange="ImportProfileJson" accept=".json" style="display:none" />
                     </label>
+                    <button class="ds-chip" @onclick="ResetToDefault">↺ Reset to Default</button>
                 </div>
             </div>
         }
@@ -245,6 +284,14 @@
     private int CustomFmPct { get; set; } = 100;
     private int CustomChatterPct { get; set; } = 50;
     private int CustomTrianglePct { get; set; } = 23;
+    private int CustomAttackMs { get; set; } = 10;
+    private int CustomDecayMs { get; set; } = 22;
+    private int CustomSustainPct { get; set; } = 74;
+    private int CustomReleaseMs { get; set; } = 16;
+    private int CustomFilterCutoffPct { get; set; } = 165;
+    private int CustomFilterResonancePct { get; set; } = 145;
+    private int CustomWhistlePct { get; set; } = 100;
+    private string _lastPresetKey = "r2";
 
     private string SpeechText { get; set; } = "Beep-beep! Hello there, systems are online!";
     private string RtttlInput { get; set; } = "OdeToJoy:d=4,o=5,b=125:e,e,f,g,g,f,e,d,c,c,d,e,e.,8d,2d";
@@ -267,6 +314,11 @@
         ("tiny", "Tiny Unit", "600–2400 Hz · Fast Chirps"),
     ];
 
+    protected override void OnInitialized()
+    {
+        ApplyProfileToSliders(DroidVoiceProfile.R2);
+    }
+
     private DroidVoiceProfile BuildActiveProfile() => new DroidVoiceProfile
     {
         MinFreq = CustomMinFreq,
@@ -274,27 +326,53 @@
         SpeedMultiplier = CustomSpeedPct / 100f,
         FmIntensity = CustomFmPct / 100f,
         ChatterProbability = CustomChatterPct / 100f,
-        TriangleMix = CustomTrianglePct / 100f
+        TriangleMix = CustomTrianglePct / 100f,
+        AttackSeconds = CustomAttackMs / 1000f,
+        DecaySeconds = CustomDecayMs / 1000f,
+        SustainLevel = CustomSustainPct / 100f,
+        ReleaseSeconds = CustomReleaseMs / 1000f,
+        FilterCutoffMultiplier = CustomFilterCutoffPct / 100f,
+        FilterResonance = CustomFilterResonancePct / 100f,
+        WhistleProbability = CustomWhistlePct / 100f,
     }.Normalized();
 
-    private void SelectPreset(string key)
+    private void ApplyProfileToSliders(DroidVoiceProfile p)
     {
-        SelectedVoice = key;
-        var p = key switch
-        {
-            "grumpy" => DroidVoiceProfile.Grumpy,
-            "bass" => DroidVoiceProfile.Bass,
-            "tiny" => DroidVoiceProfile.Tiny,
-            _ => DroidVoiceProfile.R2
-        };
-
         CustomMinFreq = (int)MathF.Round(p.MinFreq);
         CustomMaxFreq = (int)MathF.Round(p.MaxFreq);
         CustomSpeedPct = (int)MathF.Round(p.SpeedMultiplier * 100f);
         CustomFmPct = (int)MathF.Round(p.FmIntensity * 100f);
         CustomChatterPct = (int)MathF.Round(p.ChatterProbability * 100f);
         CustomTrianglePct = (int)MathF.Round(p.TriangleMix * 100f);
+        CustomAttackMs = (int)MathF.Round(p.AttackSeconds * 1000f);
+        CustomDecayMs = (int)MathF.Round(p.DecaySeconds * 1000f);
+        CustomSustainPct = (int)MathF.Round(p.SustainLevel * 100f);
+        CustomReleaseMs = (int)MathF.Round(p.ReleaseSeconds * 1000f);
+        CustomFilterCutoffPct = (int)MathF.Round(p.FilterCutoffMultiplier * 100f);
+        CustomFilterResonancePct = (int)MathF.Round(p.FilterResonance * 100f);
+        CustomWhistlePct = (int)MathF.Round(p.WhistleProbability * 100f);
     }
+
+    private void SelectPreset(string key)
+    {
+        _lastPresetKey = key;
+        SelectedVoice = key;
+        ApplyProfileToSliders(GetPreset(key));
+    }
+
+    private void ResetToDefault()
+    {
+        // Return to the last preset the user picked, or to the classic R2 voice.
+        SelectPreset(_lastPresetKey);
+    }
+
+    private static DroidVoiceProfile GetPreset(string key) => key switch
+    {
+        "grumpy" => DroidVoiceProfile.Grumpy,
+        "bass" => DroidVoiceProfile.Bass,
+        "tiny" => DroidVoiceProfile.Tiny,
+        _ => DroidVoiceProfile.R2
+    };
 
     private void MarkCustom() => SelectedVoice = "custom";
 
@@ -316,12 +394,7 @@
 
             var p = DroidVoiceProfile.FromJson(json).Normalized();
             SelectedVoice = "custom";
-            CustomMinFreq = (int)MathF.Round(p.MinFreq);
-            CustomMaxFreq = (int)MathF.Round(p.MaxFreq);
-            CustomSpeedPct = (int)MathF.Round(p.SpeedMultiplier * 100f);
-            CustomFmPct = (int)MathF.Round(p.FmIntensity * 100f);
-            CustomChatterPct = (int)MathF.Round(p.ChatterProbability * 100f);
-            CustomTrianglePct = (int)MathF.Round(p.TriangleMix * 100f);
+            ApplyProfileToSliders(p);
 
             SetStatus($"Loaded profile from {e.File.Name}");
         }
