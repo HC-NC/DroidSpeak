@@ -282,10 +282,49 @@ public class DroidVoiceProfileTests
     public void Profiles_ProduceDistinctAudio()
     {
         const string text = "Бип-буп. Привет!";
-        var r2 = new DroidSynthesizer(seed: 5, profile: DroidVoiceProfile.R2).Synthesize(text);
-        var tiny = new DroidSynthesizer(seed: 5, profile: DroidVoiceProfile.Tiny).Synthesize(text);
+        var profiles = new[]
+        {
+            DroidVoiceProfile.R2,
+            DroidVoiceProfile.Grumpy,
+            DroidVoiceProfile.Bass,
+            DroidVoiceProfile.Tiny,
+        };
+        var renders = new float[profiles.Length][];
 
-        Assert.False(r2.AsSpan().SequenceEqual(tiny));
+        for (var i = 0; i < profiles.Length; i++)
+        {
+            renders[i] = new DroidSynthesizer(seed: 5, profile: profiles[i]).Synthesize(text);
+        }
+
+        for (var i = 0; i < renders.Length; i++)
+        {
+            for (var j = i + 1; j < renders.Length; j++)
+            {
+                Assert.False(
+                    renders[i].AsSpan().SequenceEqual(renders[j]),
+                    $"Profiles {profiles[i]} and {profiles[j]} rendered identical audio.");
+            }
+        }
+    }
+
+    [Fact]
+    public void Presets_AdoptTheV05Parameters()
+    {
+        // Every shipped preset must actually exercise the expressive layer, otherwise the
+        // per-preset PCM snapshots would silently fall back to the legacy voice.
+        foreach (var profile in new[]
+        {
+            DroidVoiceProfile.R2,
+            DroidVoiceProfile.Grumpy,
+            DroidVoiceProfile.Bass,
+            DroidVoiceProfile.Tiny,
+        })
+        {
+            Assert.True(profile.FormantMix > 0f);
+            Assert.True(profile.PitchCurve > 0f);
+            Assert.True(profile.RoomMix > 0f);
+            Assert.True(profile.SaturationDrive > 0f);
+        }
     }
 
     [Theory]
