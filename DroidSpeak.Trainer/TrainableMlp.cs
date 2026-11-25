@@ -497,8 +497,11 @@ internal sealed class TrainableMlp
             moments[i] = (_beta1 * moments[i]) + (keepMoments * gradient);
             velocities[i] = (_beta2 * velocities[i]) + (keepVelocities * gradient * gradient);
 
+            // Cleanest form of the bias correction: divide the second moment by its correction
+            // *before* the square root. Dividing the square root instead would under-correct by a
+            // factor of sqrt(correction2), which quietly shrinks the first updates.
             var normalized = (moments[i] / correction1) /
-                ((MathF.Sqrt(velocities[i]) / correction2) + _epsilon);
+                (MathF.Sqrt(velocities[i] / correction2) + _epsilon);
             values[i] -= learningRate * normalized;
         }
     }
