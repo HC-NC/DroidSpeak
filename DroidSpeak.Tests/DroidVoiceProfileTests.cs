@@ -1,3 +1,5 @@
+using System.Runtime.InteropServices;
+using System.Security.Cryptography;
 using System.Text.Json;
 using DroidSpeak.DSP;
 
@@ -286,12 +288,14 @@ public class DroidVoiceProfileTests
         Assert.False(r2.AsSpan().SequenceEqual(tiny));
     }
 
-    [Fact]
-    public void NeutralV05Parameters_LeaveAudioUntouched()
+    [Theory]
+    [InlineData("Hello, world!", "3F13189C18152E4E7BDBACFC8B0460014B011E41BD59006D961FC45402E4EF14")]
+    [InlineData("Привет, как дела?", "660EBB09199AE37818B77C6E94DABF2966891FDC7B51538CFD707D5C3F0CDD3E")]
+    public void NeutralV05Parameters_ReproduceLegacyAudio(string text, string legacyHash)
     {
-        const string text = "Бип-буп, R2!";
-        var classic = new DroidSynthesizer(seed: 9, profile: DroidVoiceProfile.R2);
-        var neutral = new DroidSynthesizer(seed: 9, profile: DroidVoiceProfile.R2 with
+        // A profile with every v0.5 parameter zeroed must be bit-identical to the
+        // v0.4 renderer, whose PCM snapshots are pinned by these pre-tuning hashes.
+        var neutral = new DroidSynthesizer(seed: 0, profile: DroidVoiceProfile.R2 with
         {
             FormantMix = 0f,
             RingModMix = 0f,
@@ -300,7 +304,9 @@ public class DroidVoiceProfileTests
             PitchCurve = 0f,
         });
 
-        Assert.Equal(classic.Synthesize(text), neutral.Synthesize(text));
+        var samples = neutral.Synthesize(text);
+
+        Assert.Equal(legacyHash, Convert.ToHexString(SHA256.HashData(MemoryMarshal.AsBytes(samples.AsSpan()))));
     }
 
     [Fact]

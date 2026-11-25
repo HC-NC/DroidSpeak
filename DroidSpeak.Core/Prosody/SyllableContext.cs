@@ -71,4 +71,10 @@ public struct SyllableContext
 
     /// <summary>Whether this syllable starts a new part of a hyphenated word.</summary>
     public bool IsHyphenBoundary;
+
+    /// <summary>
+    /// The syllable nucleus (vowel) character, or <c>'\0'</c> for a consonant-only syllable.
+    /// Used to pick vowel formant frequencies without re-parsing the text.
+    /// </summary>
+    public char Nucleus;
 }

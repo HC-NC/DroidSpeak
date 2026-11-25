@@ -88,7 +88,15 @@ public sealed record DroidVoiceProfile
     public float PitchCurve { get; init; } = 0f;
 
     /// <summary>Classic bright astromech, the default voice.</summary>
-    public static DroidVoiceProfile R2 { get; } = new();
+    public static DroidVoiceProfile R2 { get; } = new()
+    {
+        // Expressive vowel formants, a light metallic shimmer and a touch of room ambience.
+        FormantMix = 0.55f,
+        RingModMix = 0.14f,
+        SaturationDrive = 0.55f,
+        RoomMix = 0.18f,
+        PitchCurve = 0.45f,
+    };
 
     /// <summary>Lower, raspier and slightly slower — a grumpy Chopper-like voice.</summary>
     public static DroidVoiceProfile Grumpy { get; } = new()
@@ -102,6 +110,12 @@ public sealed record DroidVoiceProfile
         // Darker and more nasal: a lower cutoff with a stronger resonant peak.
         FilterCutoffMultiplier = 1.35f,
         FilterResonance = 1.85f,
+        // Heavy ring modulation and drive: a gritty, nasal Chopper-like growl.
+        FormantMix = 0.50f,
+        RingModMix = 0.42f,
+        SaturationDrive = 1.60f,
+        RoomMix = 0.26f,
+        PitchCurve = 0.30f,
     };
 
     /// <summary>Heavy, bass-heavy droid with a slow, deliberate cadence.</summary>
@@ -116,6 +130,12 @@ public sealed record DroidVoiceProfile
         // Slow, deliberate swells with a long tail.
         AttackSeconds = 0.020f,
         ReleaseSeconds = 0.030f,
+        // Deep, warm saturation with a long room tail and restrained sidebands.
+        FormantMix = 0.42f,
+        RingModMix = 0.10f,
+        SaturationDrive = 2.20f,
+        RoomMix = 0.32f,
+        PitchCurve = 0.18f,
     };
 
     /// <summary>Very fast, high-pitched chatterbox.</summary>
@@ -131,6 +151,12 @@ public sealed record DroidVoiceProfile
         AttackSeconds = 0.006f,
         ReleaseSeconds = 0.009f,
         WhistleProbability = 1.30f,
+        // Bright formants and fast pitch arcs make it sound permanently excited.
+        FormantMix = 0.62f,
+        RingModMix = 0.26f,
+        SaturationDrive = 0.35f,
+        RoomMix = 0.10f,
+        PitchCurve = 0.85f,
     };
 
     /// <summary>Serializes this profile to JSON using a source-generated contract.</summary>

@@ -261,6 +261,69 @@ public sealed class RuleBasedProsodyPredictor : IProsodyPredictor
 
             var growlDepth = context.HasVoicedOnset ? 0.20f : 0f;
 
+            var formantScale = Math.Clamp(profile.MaxFreq / 1600f, 0.72f, 1.40f)
+                * (1f + 0.10f * arousal);
+            var (formant1, formant2) = VowelFormants(context.Nucleus);
+            var brightness = 1f + 0.08f * context.EmotionValence;
+            var maxFormant = MathF.Max(400f, sampleRate * 0.42f);
+            formant1 = Math.Clamp(formant1 * formantScale, 150f, maxFormant * 0.70f);
+            formant2 = Math.Clamp(
+                formant2 * formantScale * brightness,
+                formant1 + 100f,
+                maxFormant);
+
+            var formantMix = 0f;
+            if (profile.FormantMix > 0f)
+            {
+                var vowelPresence = context.Nucleus == '\0' ? 0.35f : 1f;
+                var onsetDuck = context.HasSibilantOnset ? 0.65f : 1f;
+                var emphasis = 1f
+                    + 0.15f * arousal
+                    + (context.IsStressed ? 0.12f : 0f)
+                    + (context.IsShout ? 0.10f : 0f);
+                formantMix = Math.Clamp(
+                    profile.FormantMix * vowelPresence * onsetDuck * emphasis,
+                    0f,
+                    1f);
+            }
+
+            var ringModMix = 0f;
+            if (profile.RingModMix > 0f)
+            {
+                var metallic = 0.75f
+                    + 0.35f * arousal
+                    + (context.IsShout ? 0.15f : 0f)
+                    + (context.HasVoicedOnset ? 0.08f : 0f);
+                ringModMix = Math.Clamp(profile.RingModMix * metallic, 0f, 1f);
+            }
+
+            // A short, energy-driven onset chirp: consonants and high arousal make it stronger,
+            // the syllable seed picks its direction so a phrase never chirps the same way twice.
+            var attackChirp = 0f;
+            if (profile.PitchCurve > 0f)
+            {
+                var energy = Math.Clamp(
+                    0.55f * valence +
+                    0.85f * arousal +
+                    (context.IsStressed ? 0.20f : 0f) +
+                    (context.IsShout ? 0.30f : 0f),
+                    0f,
+                    1f);
+                var magnitude = profile.PitchCurve * (0.05f + 0.10f * energy);
+                if (context.HasSibilantOnset)
+                {
+                    magnitude *= 1.35f;
+                }
+
+                if (context.HasVoicedOnset)
+                {
+                    magnitude *= 1.15f;
+                }
+
+                var direction = (syllableSeed & 0x10u) == 0u ? 1f : -1f;
+                attackChirp = direction * magnitude;
+            }
+
             var frame = new SyllableFrame
             {
                 StartSample = cursor,
@@ -281,6 +344,11 @@ public sealed class RuleBasedProsodyPredictor : IProsodyPredictor
                 StartGrowlIntensity = growlDepth,
                 GrowlIntensity = growlDepth,
                 NoiseMix = noise,
+                RingModMix = ringModMix,
+                FormantF1 = formant1,
+                FormantF2 = formant2,
+                FormantMix = formantMix,
+                AttackChirp = attackChirp,
                 HasVoicedOnset = context.HasVoicedOnset,
                 Seed = syllableSeed,
                 Drive = drive,
@@ -329,6 +397,64 @@ public sealed class RuleBasedProsodyPredictor : IProsodyPredictor
         frames[frameCount - 1].PauseAfterSeconds = finalPause / (float)sampleRate;
 
         LinkLegatoSegments(frames, frameCount);
+        ApplyPitchCurves(frames, frameCount, profile);
+    }
+
+    /// <summary>
+    /// Adds the three-point contour to every frame. The midpoint is derived from the final
+    /// start/end frequencies, so question rises and ellipsis falls still land on the right note.
+    /// </summary>
+    private static void ApplyPitchCurves(
+        Span<SyllableFrame> frames,
+        int count,
+        DroidVoiceProfile profile)
+    {
+        if (profile.PitchCurve <= 0f)
+        {
+            return;
+        }
+
+        for (var i = 0; i < count; i++)
+        {
+            ref var frame = ref frames[i];
+            var start = MathF.Max(1f, frame.StartFreq);
+            var end = MathF.Max(1f, frame.EndFreq);
+            var geometric = MathF.Sqrt(start * end);
+
+            // Each syllable arcs by a deterministic amount between half and full curvature, in a
+            // direction chosen by its seed. Positive means "overshoot the straight glide".
+            var amount = 0.5f + ((frame.Seed >> 8) & 0xFFu) * (0.5f / 255f);
+            var direction = (frame.Seed & 0x100u) == 0u ? 1f : -1f;
+            var octaves = direction * profile.PitchCurve * 0.16f * amount;
+
+            frame.MidFreq = Math.Clamp(
+                geometric * MathF.Pow(2f, octaves),
+                profile.MinFreq,
+                profile.MaxFreq);
+        }
+    }
+
+    /// <summary>
+    /// Maps a vowel letter (Latin or Cyrillic) to its first and second formant in Hz. Palatalised
+    /// Russian vowels keep their raised second formant, which is what makes the language sound
+    /// distinctly "soft" next to English.
+    /// </summary>
+    private static (float First, float Second) VowelFormants(char nucleus)
+    {
+        return char.ToLowerInvariant(nucleus) switch
+        {
+            'a' or 'а' => (730f, 1090f),
+            'я' => (660f, 1720f),
+            'e' or 'э' => (530f, 1840f),
+            'е' => (400f, 2000f),
+            'i' or 'и' => (280f, 2250f),
+            'y' or 'ы' => (320f, 1400f),
+            'o' or 'о' => (570f, 840f),
+            'ё' => (400f, 1900f),
+            'u' or 'у' => (310f, 870f),
+            'ю' => (300f, 1800f),
+            _ => (500f, 1500f),
+        };
     }
 
     private static void ApplyWordEnvelope(

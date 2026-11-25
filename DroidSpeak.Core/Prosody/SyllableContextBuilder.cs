@@ -90,6 +90,7 @@ internal static class SyllableContextBuilder
                         HasVoicedOnset = syllable.HasVoicedOnset,
                         HasSibilantOnset = syllable.HasSibilantOnset,
                         IsHyphenBoundary = syllableIndex > 0 && syllable.Text.Contains('-'),
+                        Nucleus = syllable.Nucleus,
                     };
                 }
 
