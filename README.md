@@ -21,6 +21,7 @@
 - **Emotion & Typography NLP (`DroidSpeak.NLP`):** Extracts continuous `Valence–Arousal` vectors from punctuation (`!`, `?`, `...`), `ALL CAPS`, and a built-in bilingual (EN/RU) lexicon.
 - **Pluggable Prosody (`DroidSpeak.Prosody`):** The `IProsodyPredictor` contract turns flat `SyllableContext` values into per-syllable `SyllableFrame` descriptions, fully decoupled from DSP. `RuleBasedProsodyPredictor` reproduces the classic voice bit-for-bit; custom predictors can be injected without touching the renderer.
 - **Procedural FM & Legato DSP (`DroidSpeak.DSP`):** Continuous-phase sine/triangle oscillators, dual FM modulators, exponential portamento, word-level ADSR envelopes, consonant noise/growl shaping, and procedural chatter (30 Hz trills, micro-arpeggios, relay clicks).
+- **Rich Analog/Vocal DSP (`DroidSpeak.DSP`, v0.5.0):** Optional per-syllable vowel formant bank (Latin/Cyrillic nuclei mapped to F1/F2), inharmonic ring modulation, three-point pitch arcs, energy-driven attack chirps, soft analog saturation and early-reflection ambience, all profile-driven and zero-allocation.
 - **Polyphonic Music & Melody Engine (`DroidSpeak.Music`):** Built-in zero-dependency parsers for Standard MIDI Files (`.mid`, SMF Format 0 & 1) and RTTTL ringtones, rendered with an expressive lead droid voice (portamento glides, trills, upward chirps) and relay-click percussion, plus a `--solo` lead-only mode.
 - **Customizable Voice Profiles:** Built-in presets (`R2`, `Grumpy`, `Bass`, `Tiny`) plus JSON serialization to craft custom droid personalities.
 - **Acoustic Steganography Modem (`DroidSpeak.Modem`):** Hides UTF-8 text payloads inside droid speech using FSK (3400 / 4400 Hz) with Hamming(12,8) forward error correction, bit interleaving, CRC-8, and an in-house radix-2 FFT decoder.
@@ -197,8 +198,9 @@ var whisper = new DroidSynthesizer(predictor: new WhisperPredictor());
 ```
 
 `RuleBasedProsodyPredictor` stays the default and produces byte-identical output to v0.3.0 for the
-same text, seed and profile. `SyllableFrame` also carries reserved `MidFreq`, `RingModMix` and
-`Formant*` fields for the upcoming expressive layer; the v0.4 renderer ignores them.
+same text, seed and profile. `SyllableFrame` also carries `MidFreq`, `RingModMix` and `Formant*`
+fields for the v0.5 expressive layer; the renderer consumes them when the active voice profile
+enables the corresponding parameters and leaves the v0.4 path untouched otherwise.
 
 ### Voice Profiles (Code & JSON)
 
@@ -236,6 +238,25 @@ profile-driven too. Documents written by older versions that omit these fields k
 | `FilterCutoffMultiplier` | 1.65 | 0.80–4.00 | Base cutoff relative to `MaxFreq` |
 | `FilterResonance` | 1.45 | 0.50–4.00 | Q of the resonant low-pass |
 | `WhistleProbability` | 1.00 | 0.00–1.50 | Whistle chance multiplier (`0` disables whistles) |
+
+### v0.5 Rich DSP & Vocal Formants
+
+v0.5.0 adds five expressive parameters. All of them default to `0`, which keeps a hand-built
+profile (and any JSON written by older versions) bit-identical to the v0.4 renderer; the shipped
+presets enable them:
+
+| Parameter | Default | Range | Effect | `R2` | `Grumpy` | `Bass` | `Tiny` |
+| :--- | :---: | :---: | :--- | :---: | :---: | :---: | :---: |
+| `FormantMix` | 0.00 | 0.00–1.00 | Parallel vowel formant bank driven by the syllable nucleus | 0.55 | 0.50 | 0.42 | 0.62 |
+| `RingModMix` | 0.00 | 0.00–1.00 | Inharmonic ring modulation for metallic sidebands | 0.14 | 0.42 | 0.10 | 0.26 |
+| `SaturationDrive` | 0.00 | 0.00–4.00 | Analog soft-clipping drive before the resonant low-pass | 0.55 | 1.60 | 2.20 | 0.35 |
+| `RoomMix` | 0.00 | 0.00–1.00 | Early-reflection (7 ms / 13 ms taps) ambience send | 0.18 | 0.26 | 0.32 | 0.10 |
+| `PitchCurve` | 0.00 | 0.00–1.00 | Three-point pitch arcs and energy-driven attack chirps | 0.45 | 0.30 | 0.18 | 0.85 |
+
+The `RuleBasedProsodyPredictor` scales the per-syllable formant mix, ring depth and chirp
+strength by vowel presence, onset type, stress, shout and phrase emotion, and maps Latin and
+Cyrillic vowels to their first two formants, so the expressive layer follows the text instead of
+coloring every syllable the same way.
 
 Preset highlights: `Grumpy` uses a lower cutoff with a stronger resonant peak, `Bass` has a slower
 attack and a longer release, and `Tiny` has snappier envelopes plus extra whistles. If a word is
