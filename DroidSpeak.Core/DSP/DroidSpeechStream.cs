@@ -30,10 +30,8 @@ public sealed class DroidSpeechStream
     private int _whistleCursor;
     private int _chatterCursor;
 
-    // Continuous oscillator phases across chunks.
-    private double _carrierPhase;
-    private double _modulatorPhase;
-    private double _modulatorPhase2;
+    // Continuous oscillator, ring-modulator and formant filter state across chunks.
+    private VoiceState _voice;
 
     // Continuous 2-pole SVF low-pass filter state across chunks.
     private float _filterLow;
@@ -69,9 +67,7 @@ public sealed class DroidSpeechStream
         _noteCursor = 0;
         _whistleCursor = 0;
         _chatterCursor = 0;
-        _carrierPhase = 0d;
-        _modulatorPhase = 0d;
-        _modulatorPhase2 = 0d;
+        _voice.Reset();
         _filterLow = 0f;
         _filterBand = 0f;
         _envFollower = 0f;
@@ -147,112 +143,9 @@ public sealed class DroidSpeechStream
     /// </summary>
     private void RenderNoteSlice(in DroidSynthesizer.NoteEvent note, int startOffset, Span<float> target)
     {
-        // Fast-forward the deterministic XorShift PRNG to the requested sample offset. Noise is
-        // consumed once per sample, so skipping N samples is exactly N PRNG steps.
-        var noiseState = note.Seed == 0 ? 0x9E3779B9u : note.Seed;
-        if (note.NoiseAmount > 0f)
-        {
-            for (var skip = 0; skip < startOffset; skip++)
-            {
-                noiseState ^= noiseState << 13;
-                noiseState ^= noiseState >> 17;
-                noiseState ^= noiseState << 5;
-            }
-        }
-
-        var wordDuration = Math.Max(1, note.WordEndSample - note.WordStartSample) / (float)_sampleRate;
-        var frequencyRatio = note.EndFrequency / note.StartFrequency;
-        var lastSample = Math.Max(1, note.Length - 1);
-        var triangleBase = Math.Clamp(_profile.TriangleMix, 0f, 0.60f);
-        var invRate = 1f / _sampleRate;
-
-        for (var k = 0; k < target.Length; k++)
-        {
-            var n = startOffset + k;
-            var noteTime = n * invRate;
-            var absoluteTime = (note.StartSample + n) * invRate;
-            var timeInWord = (note.StartSample + n - note.WordStartSample) * invRate;
-            var position = n / (float)lastSample;
-
-            // Smoothstep makes the glide ease in and out instead of sounding like a ramp.
-            var curveT = position * position * (3f - 2f * position);
-
-            // Pitch is perceived logarithmically, so glide exponentially between frequencies.
-            var frequency = note.StartFrequency * MathF.Pow(frequencyRatio, curveT);
-
-            // Bell-shaped onset scoop (starts and ends at zero, so no click).
-            if (timeInWord < 0.022f)
-            {
-                var scoopPhase = timeInWord / 0.022f;
-                var direction = (note.Seed & 1u) == 0u ? -0.045f : 0.040f;
-                frequency *= 1f + direction * MathF.Sin(MathF.PI * scoopPhase);
-            }
-
-            if (note.TrillDepth > 0f)
-            {
-                // Smooth 15 ms fade-in prevents an instantaneous frequency jump at onset.
-                var trillFade = Math.Clamp(noteTime / 0.015f, 0f, 1f);
-                frequency += note.TrillDepth * trillFade * MathF.Sin(TwoPi * note.TrillRate * absoluteTime);
-            }
-
-            var growlDepth = note.StartGrowlDepth + (note.GrowlDepth - note.StartGrowlDepth) * curveT;
-            var growlWave = MathF.Sin(TwoPi * note.GrowlFrequency * absoluteTime);
-            if (growlDepth > 0f)
-            {
-                frequency += 45f * growlDepth * growlWave;
-            }
-
-            frequency = MathF.Max(20f, frequency);
-
-            _carrierPhase += TwoPi * frequency * invRate;
-            _modulatorPhase += TwoPi * frequency * note.ModulatorRatio * invRate;
-            _modulatorPhase2 += TwoPi * frequency * note.ModulatorRatio2 * invRate;
-
-            var modulator = MathF.Sin((float)_modulatorPhase);
-            var modulator2 = MathF.Sin((float)_modulatorPhase2);
-
-            // Dynamic FM attack decay: bright consonant bite at onset, warming into a pure whistle.
-            var fmBurst = 0.42f + 0.58f * MathF.Exp(-noteTime * 28f);
-            var fmIndex = (note.StartFmIndex + (note.FmIndex - note.StartFmIndex) * curveT) * fmBurst;
-            var fmIndex2 = (note.StartFmIndex2 + (note.FmIndex2 - note.StartFmIndex2) * curveT) * fmBurst;
-
-            var carrier = MathF.Sin((float)_carrierPhase + fmIndex * modulator + fmIndex2 * modulator2);
-            var triangleMix = triangleBase * fmBurst;
-            var wave =
-                (0.85f - triangleMix) * carrier +
-                triangleMix * Triangle(_carrierPhase) +
-                0.15f * fmBurst * MathF.Sin((float)(_carrierPhase * 3.01 + 0.55 * modulator2));
-
-            var envelope = AdsrEnvelope(
-                timeInWord,
-                wordDuration,
-                note.WordAttack,
-                note.WordDecay,
-                note.SustainLevel,
-                note.WordRelease);
-
-            var amplitude = note.StartAmplitude + (note.Amplitude - note.StartAmplitude) * curveT;
-            var growl = 1f + growlDepth * growlWave;
-            var sample = wave * amplitude * envelope * growl;
-
-            if (note.NoiseAmount > 0f)
-            {
-                noiseState ^= noiseState << 13;
-                noiseState ^= noiseState >> 17;
-                noiseState ^= noiseState << 5;
-                var noise = ((noiseState >> 8) * (1f / 16777216f)) * 2f - 1f;
-                var noiseEnvelope = MathF.Exp(-noteTime * 110f);
-                sample += noise * note.NoiseAmount * envelope * noiseEnvelope;
-            }
-
-            if (note.Saturation > 0f && note.Drive > 1f)
-            {
-                var shaped = MathF.Tanh(sample * note.Drive);
-                sample += (shaped - sample) * Math.Clamp(note.Saturation, 0f, 0.9f);
-            }
-
-            target[k] += sample;
-        }
+        // The offline and streaming paths share one renderer, so a note split across chunks is
+        // sample-for-sample identical to the same note rendered in one pass.
+        NoteRenderer.Render(note, startOffset, target, ref _voice, _profile.TriangleMix, _sampleRate);
     }
 
     private void RenderWhistlesInRange(int chunkStart, int chunkEnd, Span<float> target)

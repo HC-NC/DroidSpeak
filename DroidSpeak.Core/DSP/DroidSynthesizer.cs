@@ -1,4 +1,4 @@
-using System.Buffers;
+﻿using System.Buffers;
 using DroidSpeak.NLP;
 using DroidSpeak.Prosody;
 
@@ -12,7 +12,7 @@ namespace DroidSpeak.DSP;
 /// modulation for voiced consonants and a word-level ADSR envelope. A single continuous oscillator
 /// spans the whole utterance: phase never resets between syllables, and syllables inside a word are
 /// joined by exponential portamento (legato). Stressed or emotional syllables may add short
-/// 1400–2600 Hz whistles and sobs, while shouted words and exclamations are driven into a
+/// 1400вЂ“2600 Hz whistles and sobs, while shouted words and exclamations are driven into a
 /// soft-clipping stage. All randomness is derived from stable word hashes, so the same input always
 /// produces exactly the same audio.
 /// </para>
@@ -36,7 +36,7 @@ public sealed class DroidSynthesizer
     private readonly IProsodyPredictor _prosody;
 
     /// <summary>Creates a synthesizer.</summary>
-    /// <param name="sampleRate">Output sample rate in Hz (8000–192000).</param>
+    /// <param name="sampleRate">Output sample rate in Hz (8000вЂ“192000).</param>
     /// <param name="seed">Global seed mixed into every syllable seed. Defaults to <c>0</c>.</param>
     /// <param name="profile">Voice profile. Defaults to <see cref="DroidVoiceProfile.R2"/>.</param>
     /// <param name="predictor">
@@ -308,6 +308,10 @@ public sealed class DroidSynthesizer
                 Seed = frame.Seed,
                 ModulatorRatio = frame.FmRatio,
                 ModulatorRatio2 = frame.FmRatio2,
+                RingModMix = frame.RingModMix,
+                FormantF1 = frame.FormantF1,
+                FormantF2 = frame.FormantF2,
+                FormantMix = frame.FormantMix,
                 Drive = frame.Drive,
                 Saturation = frame.Saturation,
                 WordStartSample = frame.WordStartSample,
@@ -341,9 +345,7 @@ public sealed class DroidSynthesizer
     private void Render(ReadOnlySpan<SyllableFrame> frames, Span<float> buffer, DroidVoiceProfile profile)
     {
         // One oscillator for the whole utterance: phase is never reset between syllables.
-        var carrierPhase = 0d;
-        var modulatorPhase = 0d;
-        var modulatorPhase2 = 0d;
+        var voice = default(VoiceState);
 
         // Three ordered passes preserve the v0.3.0 mix order: every note first, then every
         // whistle, then every chatter. Overlapping layers therefore sum in the same order and
@@ -360,9 +362,7 @@ public sealed class DroidSynthesizer
             RenderNote(
                 frame,
                 buffer.Slice(frame.StartSample, count),
-                ref carrierPhase,
-                ref modulatorPhase,
-                ref modulatorPhase2,
+                ref voice,
                 profile);
         }
 
@@ -409,96 +409,48 @@ public sealed class DroidSynthesizer
     private void RenderNote(
         in SyllableFrame frame,
         Span<float> target,
-        ref double carrierPhase,
-        ref double modulatorPhase,
-        ref double modulatorPhase2,
+        ref VoiceState voice,
         DroidVoiceProfile profile)
     {
-        var random = new XorShift32(frame.Seed);
-        var wordDuration = Math.Max(1, frame.WordEndSample - frame.WordStartSample) / (float)_sampleRate;
-        var frequencyRatio = frame.EndFreq / frame.StartFreq;
-        var lastSample = Math.Max(1, frame.LengthSamples - 1);
-
-        for (var n = 0; n < target.Length; n++)
+        var note = new NoteEvent
         {
-            var noteTime = n / (float)_sampleRate;
-            var absoluteTime = (frame.StartSample + n) / (float)_sampleRate;
-            var timeInWord = (frame.StartSample + n - frame.WordStartSample) / (float)_sampleRate;
-            var position = n / (float)lastSample;
+            StartSample = frame.StartSample,
+            Length = frame.LengthSamples,
+            StartFrequency = frame.StartFreq,
+            EndFrequency = frame.EndFreq,
+            StartAmplitude = frame.StartGain,
+            Amplitude = frame.Gain,
+            StartFmIndex = frame.StartFmDepth,
+            FmIndex = frame.FmDepth,
+            StartFmIndex2 = frame.StartFmDepth2,
+            FmIndex2 = frame.FmDepth2,
+            StartGrowlDepth = frame.StartGrowlIntensity,
+            GrowlDepth = frame.GrowlIntensity,
+            GrowlFrequency = frame.GrowlFrequency,
+            NoiseAmount = frame.NoiseMix,
+            HasVoicedOnset = frame.HasVoicedOnset,
+            Seed = frame.Seed,
+            ModulatorRatio = frame.FmRatio,
+            ModulatorRatio2 = frame.FmRatio2,
+            Drive = frame.Drive,
+            Saturation = frame.Saturation,
+            WordStartSample = frame.WordStartSample,
+            WordEndSample = frame.WordEndSample,
+            WordAttack = frame.AttackTime,
+            WordDecay = frame.DecayTime,
+            WordRelease = frame.ReleaseTime,
+            SustainLevel = frame.SustainLevel,
+            TrillDepth = frame.TrillDepth,
+            TrillRate = frame.TrillRate,
+            RingModMix = frame.RingModMix,
+            FormantF1 = frame.FormantF1,
+            FormantF2 = frame.FormantF2,
+            FormantMix = frame.FormantMix,
+        };
 
-            // Smoothstep makes the glide ease in and out instead of sounding like a ramp.
-            var curveT = position * position * (3f - 2f * position);
-
-            // Pitch is perceived logarithmically, so glide exponentially between frequencies.
-            var frequency = frame.StartFreq * MathF.Pow(frequencyRatio, curveT);
-
-            // 1. Smooth bell-shaped whistle transient (starts and ends at 0, zero phase/freq click)
-            if (timeInWord < 0.022f)
-            {
-                var scoopPhase = timeInWord / 0.022f;
-                var direction = (frame.Seed & 1u) == 0u ? -0.045f : 0.040f;
-                frequency *= 1f + direction * MathF.Sin(MathF.PI * scoopPhase);
-            }
-
-
-            if (frame.TrillDepth > 0f)
-            {
-                // Smooth 15ms fade-in prevents an instantaneous frequency jump (click) at syllable onset
-                var trillFade = Math.Clamp(noteTime / 0.015f, 0f, 1f);
-                frequency += frame.TrillDepth * trillFade * MathF.Sin(TwoPi * frame.TrillRate * absoluteTime);
-            }
-
-            var growlDepth = frame.StartGrowlIntensity
-                + (frame.GrowlIntensity - frame.StartGrowlIntensity) * curveT;
-            var growlWave = MathF.Sin(TwoPi * frame.GrowlFrequency * absoluteTime);
-            if (growlDepth > 0f)
-            {
-                frequency += 45f * growlDepth * growlWave;
-            }
-
-            frequency = MathF.Max(20f, frequency);
-
-            carrierPhase += TwoPi * frequency / _sampleRate;
-            modulatorPhase += TwoPi * frequency * frame.FmRatio / _sampleRate;
-            modulatorPhase2 += TwoPi * frequency * frame.FmRatio2 / _sampleRate;
-
-            var modulator = MathF.Sin((float)modulatorPhase);
-            var modulator2 = MathF.Sin((float)modulatorPhase2);
-
-            // 2. Dynamic FM attack decay: bright consonant bite at onset, warming into a pure whistle
-            var fmBurst = 0.42f + 0.58f * MathF.Exp(-noteTime * 28f);
-            var fmIndex = (frame.StartFmDepth + (frame.FmDepth - frame.StartFmDepth) * curveT) * fmBurst;
-            var fmIndex2 = (frame.StartFmDepth2 + (frame.FmDepth2 - frame.StartFmDepth2) * curveT) * fmBurst;
-
-            var carrier = MathF.Sin((float)carrierPhase + fmIndex * modulator + fmIndex2 * modulator2);
-            var triangleMix = Math.Clamp(profile.TriangleMix, 0f, 0.60f) * fmBurst;
-            var wave =
-                (0.85f - triangleMix) * carrier +
-                triangleMix * Triangle(carrierPhase) +
-                0.15f * fmBurst * MathF.Sin((float)(carrierPhase * 3.01 + 0.55 * modulator2));
-
-            var envelope = AdsrEnvelope(
-                timeInWord,
-                wordDuration,
-                frame.AttackTime,
-                frame.DecayTime,
-                frame.SustainLevel,
-                frame.ReleaseTime);
-
-            var amplitude = frame.StartGain + (frame.Gain - frame.StartGain) * curveT;
-            var growl = 1f + growlDepth * growlWave;
-            var sample = wave * amplitude * envelope * growl;
-
-            if (frame.NoiseMix > 0f)
-            {
-                var noise = random.NextFloat() * 2f - 1f;
-                var noiseEnvelope = MathF.Exp(-noteTime * 110f);
-                sample += noise * frame.NoiseMix * envelope * noiseEnvelope;
-            }
-
-            target[n] += SoftSaturate(sample, frame.Drive, frame.Saturation);
-        }
+        NoteRenderer.Render(note, 0, target, ref voice, profile.TriangleMix, _sampleRate);
     }
+
 
     private void RenderWhistle(in SyllableFrame frame, Span<float> target)
     {
@@ -786,6 +738,10 @@ public sealed class DroidSynthesizer
         public uint Seed;
         public float ModulatorRatio;
         public float ModulatorRatio2;
+        public float RingModMix;
+        public float FormantF1;
+        public float FormantF2;
+        public float FormantMix;
         public float Drive;
         public float Saturation;
         public int WordStartSample;
