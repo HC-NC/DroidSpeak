@@ -87,31 +87,6 @@ public sealed class NeuralProsodyPredictor : IProsodyPredictor
     /// <summary>Width of the hidden layers <see cref="CreateDefault"/> builds.</summary>
     public const int DefaultHiddenLayerWidth = 64;
 
-    private const float MinDurationSeconds = 0.045f;
-    private const float MaxDurationSeconds = 0.50f;
-    private const float MinGain = 0.18f;
-    private const float MaxGain = 0.62f;
-    private const float MinFmDepth = 0.20f;
-    private const float MaxFmDepth = 6.50f;
-    private const float FmDepth2Scale = 0.40f;
-    private const float MinFmRatio = 1.00f;
-    private const float MaxFmRatio = 3.50f;
-    private const float FmRatio2Scale = 3.07f / 2f;
-    private const float MaxGrowl = 0.35f;
-    private const float MaxNoise = 0.25f;
-    private const float MinDrive = 0.80f;
-    private const float MaxDrive = 3.40f;
-    private const float MaxSaturation = 0.72f;
-    private const float AttackSecondsFloor = 0.002f;
-    private const float AttackSecondsCeiling = 0.100f;
-    private const float ReleaseSecondsFloor = 0.005f;
-    private const float ReleaseSecondsCeiling = 0.200f;
-    private const float EnvelopeScaleMin = 0.60f;
-    private const float EnvelopeScaleMax = 1.40f;
-    private const float PhrasePauseSeconds = 0.12f;
-    private const float EllipsisPauseSeconds = 0.18f;
-    private const float PauseScaleMin = 0.50f;
-    private const float PauseScaleMax = 1.50f;
     private const float FirstPhraseLead = 0.04f;
     private const float PhraseLead = 0.09f;
     private const float WordGapSeconds = 0.016f;
@@ -120,11 +95,8 @@ public sealed class NeuralProsodyPredictor : IProsodyPredictor
     private const float CommaGapJitter = 0.045f;
     private const float HyphenGapSeconds = 0.018f;
     private const float HyphenGapJitter = 0.014f;
-    private const float MinFormantHz = 150f;
-    private const float FormantGuardHz = 100f;
     private const float MaxTrillChance = 0.75f;
     private const float TrillSeedSalt = 0x721115u;
-    private const float MaxCurveOctaves = 0.16f;
 
     private readonly MlpModel _model;
 
@@ -246,7 +218,8 @@ public sealed class NeuralProsodyPredictor : IProsodyPredictor
                     // pendingPauseAmount still holds the value of the last syllable of the phrase
                     // that just ended, which is the only one that gets a trailing silence.
                     var phrasePause = Samples(
-                        PauseSeconds(pendingPauseAmount, contexts[i - 1].Punctuation, profile),
+                        SyllableTargetDecoder.PauseSeconds(
+                            pendingPauseAmount, contexts[i - 1].Punctuation, profile),
                         sampleRate);
                     cursor += phrasePause;
                     frames[frameCount - 1].PauseAfterSamples = phrasePause;
@@ -346,31 +319,35 @@ public sealed class NeuralProsodyPredictor : IProsodyPredictor
                 seed,
                 context.WordHash,
                 (uint)context.SyllableIndex);
-            var length = Length(output, context, profile, sampleRate);
+            var length = Math.Max(
+                1,
+                Samples(
+                    SyllableTargetDecoder.DurationSeconds(
+                        Read(output, DurationIndex), context.TempoScale, profile),
+                    sampleRate));
             var isExclamation = context.Punctuation == PhrasePunctuation.Exclamation;
             var energy = Energy(context, isExclamation);
             var isSegmentStart = frameCount == segmentStartFrame;
 
-            var endFrequency = ClampFrequency(
-                MapFrequency(Read(output, EndFrequencyIndex), profile),
-                profile);
+            var endFrequency = SyllableTargetDecoder.Frequency(
+                Read(output, EndFrequencyIndex), profile);
 
             // Inside a word the glide continues from where the previous syllable landed, exactly as
             // the rule engine does. Without that joint the oscillator would jump and click, and the
             // model would only control word onsets anyway. A frame that is not a segment start always
             // has a predecessor, so the indexed reads below are safe.
             var startFrequency = isSegmentStart
-                ? ClampFrequency(MapFrequency(Read(output, StartFrequencyIndex), profile), profile)
+                ? SyllableTargetDecoder.Frequency(Read(output, StartFrequencyIndex), profile)
                 : frames[frameCount - 1].EndFreq;
 
-            var gain = NeuralMathF.Lerp(MinGain, MaxGain, Read(output, GainIndex));
-            var fmDepth = Math.Clamp(
-                NeuralMathF.Lerp(MinFmDepth, MaxFmDepth, Read(output, FmDepthIndex)) * profile.FmIntensity,
-                MinFmDepth,
-                MaxFmDepth);
-            var fmDepth2 = fmDepth * FmDepth2Scale;
-            var fmRatio = NeuralMathF.Lerp(MinFmRatio, MaxFmRatio, Read(output, FmRatioIndex));
-            var growl = Read(output, GrowlIndex) * MaxGrowl;
+            var gain = SyllableTargetDecoder.Gain(Read(output, GainIndex));
+            var fmDepth = SyllableTargetDecoder.FmDepth(Read(output, FmDepthIndex), profile);
+            var fmDepth2 = SyllableTargetDecoder.FmDepth2(fmDepth);
+            var fmRatio = SyllableTargetDecoder.FmRatio(Read(output, FmRatioIndex));
+            var growl = SyllableTargetDecoder.Growl(Read(output, GrowlIndex));
+            var saturation = Read(output, SaturationIndex);
+            var formant1 = SyllableTargetDecoder.Formant1(
+                Read(output, Formant1Index), sampleRate);
 
             var frame = new SyllableFrame
             {
@@ -380,7 +357,8 @@ public sealed class NeuralProsodyPredictor : IProsodyPredictor
                 PauseBeforeSamples = pauseBeforeSamples,
                 PauseBeforeSeconds = pauseBeforeSamples / (float)sampleRate,
                 StartFreq = startFrequency,
-                MidFreq = CurveCenter(output, startFrequency, endFrequency, profile),
+                MidFreq = SyllableTargetDecoder.CurveCenter(
+                    Read(output, MidFrequencyIndex), startFrequency, endFrequency, profile),
                 EndFreq = endFrequency,
                 StartGain = isSegmentStart ? gain : frames[frameCount - 1].Gain,
                 Gain = gain,
@@ -389,38 +367,28 @@ public sealed class NeuralProsodyPredictor : IProsodyPredictor
                 StartFmDepth2 = isSegmentStart ? fmDepth2 : frames[frameCount - 1].FmDepth2,
                 FmDepth2 = fmDepth2,
                 FmRatio = fmRatio,
-                FmRatio2 = fmRatio * FmRatio2Scale,
+                FmRatio2 = SyllableTargetDecoder.FmRatio2(fmRatio),
                 StartGrowlIntensity = isSegmentStart ? growl : frames[frameCount - 1].GrowlIntensity,
                 GrowlIntensity = growl,
                 GrowlFrequency = segmentGrowlFrequency,
-                NoiseMix = Read(output, NoiseIndex) * MaxNoise,
-                RingModMix = profile.RingModMix > 0f
-                    ? Math.Clamp(profile.RingModMix * Read(output, RingModIndex), 0f, 1f)
-                    : 0f,
-                FormantF1 = Formant1(output, sampleRate),
-                FormantF2 = Formant2(output, sampleRate),
-                FormantMix = profile.FormantMix > 0f
-                    ? Math.Clamp(profile.FormantMix * Read(output, FormantMixIndex), 0f, 1f)
-                    : 0f,
+                NoiseMix = SyllableTargetDecoder.Noise(Read(output, NoiseIndex)),
+                RingModMix = SyllableTargetDecoder.RingMod(Read(output, RingModIndex), profile),
+                FormantF1 = formant1,
+                FormantF2 = SyllableTargetDecoder.Formant2(
+                    Read(output, Formant2Index), formant1, sampleRate),
+                FormantMix = SyllableTargetDecoder.FormantMix(
+                    Read(output, FormantMixIndex), profile),
                 AttackChirp = AttackChirp(context, syllableSeed, energy, profile),
-                AttackTime = EnvelopeSeconds(
-                    output,
-                    AttackIndex,
-                    profile.AttackSeconds,
-                    AttackSecondsFloor,
-                    AttackSecondsCeiling),
+                AttackTime = SyllableTargetDecoder.AttackSeconds(
+                    Read(output, AttackIndex), profile),
                 DecayTime = profile.DecaySeconds,
-                ReleaseTime = EnvelopeSeconds(
-                    output,
-                    ReleaseIndex,
-                    profile.ReleaseSeconds,
-                    ReleaseSecondsFloor,
-                    ReleaseSecondsCeiling),
+                ReleaseTime = SyllableTargetDecoder.ReleaseSeconds(
+                    Read(output, ReleaseIndex), profile),
                 SustainLevel = profile.SustainLevel,
                 HasVoicedOnset = context.HasVoicedOnset,
                 Seed = syllableSeed,
-                Drive = NeuralMathF.Lerp(MinDrive, MaxDrive, Read(output, SaturationIndex)),
-                Saturation = Read(output, SaturationIndex) * MaxSaturation,
+                Drive = SyllableTargetDecoder.Drive(saturation),
+                Saturation = SyllableTargetDecoder.Saturation(saturation),
                 StartsLegatoSegment = isSegmentStart,
             };
 
@@ -462,7 +430,8 @@ public sealed class NeuralProsodyPredictor : IProsodyPredictor
             profile);
 
         var finalPause = Samples(
-            PauseSeconds(pendingPauseAmount, contexts[^1].Punctuation, profile),
+            SyllableTargetDecoder.PauseSeconds(
+                pendingPauseAmount, contexts[^1].Punctuation, profile),
             sampleRate);
         frames[frameCount - 1].PauseAfterSamples = finalPause;
         frames[frameCount - 1].PauseAfterSeconds = finalPause / (float)sampleRate;
@@ -474,75 +443,6 @@ public sealed class NeuralProsodyPredictor : IProsodyPredictor
     /// </summary>
     private static float Read(ReadOnlySpan<float> output, int index) =>
         NeuralMathF.Clamp01(output[index]);
-
-    private static int Length(
-        ReadOnlySpan<float> output,
-        in SyllableContext context,
-        DroidVoiceProfile profile,
-        int sampleRate)
-    {
-        var seconds = NeuralMathF.Lerp(MinDurationSeconds, MaxDurationSeconds, Read(output, DurationIndex));
-        seconds = seconds * context.TempoScale / profile.SpeedMultiplier;
-        seconds = Math.Clamp(seconds, MinDurationSeconds, MaxDurationSeconds);
-        return Math.Max(1, Samples(seconds, sampleRate));
-    }
-
-    /// <summary>
-    /// Places the contour midpoint between the two endpoints of the glide. The model output selects
-    /// how far the arc bulges, so the network owns the melody while the curve stays inside the
-    /// profile range. A neutral profile yields <c>0</c>, which keeps the two-point legacy glide.
-    /// </summary>
-    private static float CurveCenter(
-        ReadOnlySpan<float> output,
-        float startFrequency,
-        float endFrequency,
-        DroidVoiceProfile profile)
-    {
-        if (profile.PitchCurve <= 0f)
-        {
-            return 0f;
-        }
-
-        var geometric = MathF.Sqrt(MathF.Max(1f, startFrequency) * MathF.Max(1f, endFrequency));
-        var amount = (Read(output, MidFrequencyIndex) * 2f) - 1f;
-        return ClampFrequency(
-            geometric * MathF.Pow(2f, amount * profile.PitchCurve * MaxCurveOctaves),
-            profile);
-    }
-
-    private static float Formant1(ReadOnlySpan<float> output, int sampleRate)
-    {
-        var ceiling = FormantCeiling(sampleRate) * 0.70f;
-        return Math.Clamp(
-            NeuralMathF.Lerp(MinFormantHz, ceiling, Read(output, Formant1Index)),
-            MinFormantHz,
-            ceiling);
-    }
-
-    private static float Formant2(ReadOnlySpan<float> output, int sampleRate)
-    {
-        var ceiling = FormantCeiling(sampleRate);
-        var low = Formant1(output, sampleRate) + FormantGuardHz;
-        var high = MathF.Max(low, ceiling);
-        return Math.Clamp(NeuralMathF.Lerp(low, high, Read(output, Formant2Index)), low, high);
-    }
-
-    private static float FormantCeiling(int sampleRate) => MathF.Max(400f, sampleRate * 0.42f);
-
-    /// <summary>
-    /// Scales a profile envelope stage by a model output and keeps it inside the ranges
-    /// <see cref="DroidVoiceProfile.Normalized"/> accepts.
-    /// </summary>
-    private static float EnvelopeSeconds(
-        ReadOnlySpan<float> output,
-        int index,
-        float profileSeconds,
-        float minimum,
-        float maximum) =>
-        Math.Clamp(
-            profileSeconds * NeuralMathF.Lerp(EnvelopeScaleMin, EnvelopeScaleMax, Read(output, index)),
-            minimum,
-            maximum);
 
     /// <summary>
     /// The same energy measure the rule engine uses to weight whistles and trills, expressed through
@@ -619,21 +519,6 @@ public sealed class NeuralProsodyPredictor : IProsodyPredictor
         frame.TrillRate = 27f + random.NextFloat() * 8f;
     }
 
-    private static float PauseSeconds(
-        float amount,
-        PhrasePunctuation punctuation,
-        DroidVoiceProfile profile)
-    {
-        var basePause = punctuation == PhrasePunctuation.Ellipsis
-            ? EllipsisPauseSeconds
-            : PhrasePauseSeconds;
-
-        var seconds = NeuralMathF.Lerp(PauseScaleMin, PauseScaleMax, amount) * basePause
-            / profile.SpeedMultiplier;
-
-        return Math.Clamp(seconds, 0.010f, 1.00f);
-    }
-
     /// <summary>
     /// Finalizes a word (or hyphen part): publishes its sample span and shrinks the envelope of every
     /// syllable inside it proportionally when the word is too short to hold the requested attack,
@@ -677,12 +562,6 @@ public sealed class NeuralProsodyPredictor : IProsodyPredictor
             }
         }
     }
-
-    private static float MapFrequency(float amount, DroidVoiceProfile profile) =>
-        profile.MinFreq + amount * (profile.MaxFreq - profile.MinFreq);
-
-    private static float ClampFrequency(float frequency, DroidVoiceProfile profile) =>
-        Math.Clamp(frequency, profile.MinFreq, profile.MaxFreq);
 
     private static int Samples(float seconds, int sampleRate) =>
         Math.Max(0, (int)MathF.Round(seconds * sampleRate));
