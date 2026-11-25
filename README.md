@@ -17,7 +17,7 @@
 
 - **Zero External Dependencies:** `DroidSpeak.Core` relies strictly on the .NET 10 standard library.
 - **NativeAOT & Reflection-Free:** Uses source-generated `System.Text.Json` (`DroidVoiceProfileJsonContext`), making it ready for iOS, consoles, Unity/Godot, and AOT deployments.
-- **Deterministic Synthesis:** Syllable variations are seeded via a cross-platform FNV-1a hash of lowercase words—the same text and seed always produce bit-identical audio.
+- **Deterministic Synthesis:** Syllable variations are seeded via a cross-platform FNV-1a hash of lowercase words, so the same text and seed always produce identical structure and rendering behavior. Output samples are bit-identical on a given platform; across `ucrtbase`/`glibc`/`libm` they can differ by sub-ULP rounding noise that is inaudible and, for the regression tests, absorbed by the acoustic fingerprint.
 - **Emotion & Typography NLP (`DroidSpeak.NLP`):** Extracts continuous `Valence–Arousal` vectors from punctuation (`!`, `?`, `...`), `ALL CAPS`, and a built-in bilingual (EN/RU) lexicon.
 - **Pluggable Prosody (`DroidSpeak.Prosody`):** The `IProsodyPredictor` contract turns flat `SyllableContext` values into per-syllable `SyllableFrame` descriptions, fully decoupled from DSP. `RuleBasedProsodyPredictor` reproduces the classic voice bit-for-bit; custom predictors can be injected without touching the renderer.
 - **Procedural FM & Legato DSP (`DroidSpeak.DSP`):** Continuous-phase sine/triangle oscillators, dual FM modulators, exponential portamento, word-level ADSR envelopes, consonant noise/growl shaping, and procedural chatter (30 Hz trills, micro-arpeggios, relay clicks).
@@ -198,9 +198,10 @@ var whisper = new DroidSynthesizer(predictor: new WhisperPredictor());
 ```
 
 `RuleBasedProsodyPredictor` stays the default and produces byte-identical output to v0.3.0 for the
-same text, seed and profile. `SyllableFrame` also carries `MidFreq`, `RingModMix` and `Formant*`
-fields for the v0.5 expressive layer; the renderer consumes them when the active voice profile
-enables the corresponding parameters and leaves the v0.4 path untouched otherwise.
+same text, seed and profile on a given platform. `SyllableFrame` also carries `MidFreq`,
+`RingModMix` and `Formant*` fields for the v0.5 expressive layer; the renderer consumes them when
+the active voice profile enables the corresponding parameters and leaves the v0.4 path untouched
+otherwise.
 
 ### Voice Profiles (Code & JSON)
 
@@ -242,8 +243,8 @@ profile-driven too. Documents written by older versions that omit these fields k
 ### v0.5 Rich DSP & Vocal Formants
 
 v0.5.0 adds five expressive parameters. All of them default to `0`, which keeps a hand-built
-profile (and any JSON written by older versions) bit-identical to the v0.4 renderer; the shipped
-presets enable them:
+profile (and any JSON written by older versions) reproducing the v0.4 renderer exactly — bit-for
+bit on a given platform; the shipped presets enable them:
 
 | Parameter | Default | Range | Effect | `R2` | `Grumpy` | `Bass` | `Tiny` |
 | :--- | :---: | :---: | :--- | :---: | :---: | :---: | :---: |
