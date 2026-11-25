@@ -1,4 +1,5 @@
 ﻿using DroidSpeak.NLP;
+using DroidSpeak.Prosody;
 
 namespace DroidSpeak.DSP;
 
@@ -365,7 +366,7 @@ public sealed class DroidSpeechStream
             var phase = 0d;
             var lastSample = Math.Max(1, chatter.Length - 1);
             var invRate = 1f / _sampleRate;
-            var isArpeggio = chatter.Kind == DroidSynthesizer.ChatterKind.Arpeggio;
+            var isArpeggio = chatter.Kind == ChatterKind.Arpeggio;
             var stepCount = Math.Clamp(chatter.StepCount, 2, 3);
 
             for (var n = 0; n < offset + slice.Length; n++)

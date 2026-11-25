@@ -1,4 +1,5 @@
 using DroidSpeak.NLP;
+using DroidSpeak.Prosody;
 
 namespace DroidSpeak.DSP;
 
@@ -14,6 +15,11 @@ namespace DroidSpeak.DSP;
 /// soft-clipping stage. All randomness is derived from stable word hashes, so the same input always
 /// produces exactly the same audio.
 /// </para>
+/// <para>
+/// Prosody (timing, pitch, envelope and event decisions) is produced by an
+/// <see cref="IProsodyPredictor"/>; this class only flattens the resulting
+/// <see cref="SyllableFrame"/> values and renders them.
+/// </para>
 /// </summary>
 public sealed class DroidSynthesizer
 {
@@ -21,15 +27,12 @@ public sealed class DroidSynthesizer
     public const int DefaultSampleRate = 44100;
 
     private const float TwoPi = MathF.PI * 2f;
-    private const float MinFrequency = 350f;
-    private const float MaxFrequency = 1600f;
-    private const float WhistleMinFrequency = 1400f;
-    private const float WhistleMaxFrequency = 2600f;
     private const float PeakCeiling = 0.95f;
 
     private readonly int _sampleRate;
     private readonly uint _seed;
     private readonly DroidVoiceProfile _profile;
+    private readonly RuleBasedProsodyPredictor _prosody = new();
 
     /// <summary>Creates a synthesizer.</summary>
     /// <param name="sampleRate">Output sample rate in Hz (8000–192000).</param>
@@ -156,532 +159,105 @@ public sealed class DroidSynthesizer
     internal SynthesisPlan BuildPlan(IReadOnlyList<Phrase> phrases, DroidVoiceProfile profile)
     {
         profile = profile.Normalized();
+
         var plan = new SynthesisPlan();
-        var legatoRanges = new List<(int Start, int End)>();
-        var cursor = Samples(0.04f);
-        var firstPhrase = true;
-
-        foreach (var phrase in phrases)
+        var syllableCount = SyllableContextBuilder.Count(phrases);
+        if (syllableCount == 0)
         {
-            if (phrase.Words.Count == 0)
-            {
-                continue;
-            }
-
-            if (!firstPhrase)
-            {
-                cursor += Samples(0.09f);
-            }
-
-            firstPhrase = false;
-            var phraseEventStart = plan.Events.Count;
-            var previousWordHadComma = false;
-            var isExclamation = phrase.Punctuation == PhrasePunctuation.Exclamation;
-            var valence = MathF.Max(0f, phrase.Emotion.Valence);
-            var arousal = MathF.Max(0f, phrase.Emotion.Arousal);
-            var pitchSpread = 1f + 0.45f * arousal;
-
-            for (var wordIndex = 0; wordIndex < phrase.Words.Count; wordIndex++)
-            {
-                var word = phrase.Words[wordIndex];
-
-                if (wordIndex > 0)
-                {
-                    // Word gaps are jittered too, so the rhythm never feels metronomic.
-                    var wordGapRandom = new XorShift32(MixSeed(_seed, word.Hash, 0x51ED270Bu));
-                    var wordGap = previousWordHadComma
-                        ? 0.060f + wordGapRandom.NextFloat() * 0.045f
-                        : 0.016f + wordGapRandom.NextFloat() * 0.028f;
-                    var gapSamples = Samples(wordGap);
-                    var gapStart = cursor;
-                    cursor += gapSamples;
-                    TryAddChatter(plan, phrase, word, gapStart, gapSamples, profile);
-                }
-
-                previousWordHadComma = word.IsFollowedByComma;
-                var wordLengthFactor = Math.Clamp(
-                    1f + 0.05f * (word.Text.Length - 4),
-                    0.82f,
-                    1.35f);
-                var wordPitch = (word.Hash % 161u) - 80f;
-
-                // All syllables of a word (or of a hyphen-separated part) are one legato
-                // segment: no silence between notes, one attack and one release.
-                var segmentStartSample = cursor;
-                var segmentNoteStart = plan.Events.Count;
-                var segmentGrowlFrequency = 26f + (word.Hash & 0x0Fu);
-
-                for (var syllableIndex = 0; syllableIndex < word.Syllables.Count; syllableIndex++)
-                {
-                    var syllable = word.Syllables[syllableIndex];
-
-                    // A hyphen stays a real pause, but everything inside each part is legato.
-                    if (syllableIndex > 0 && syllable.Text.Contains('-'))
-                    {
-                        FinishLegatoSegment(
-                            plan,
-                            legatoRanges,
-                            segmentNoteStart,
-                            segmentStartSample,
-                            cursor,
-                            segmentGrowlFrequency,
-                            profile);
-
-                        var hyphenRandom = new XorShift32(MixSeed(_seed, word.Hash, (uint)(0x900 + syllableIndex)));
-                        var hyphenGap = Samples(0.018f + hyphenRandom.NextFloat() * 0.014f);
-                        var hyphenGapStart = cursor;
-                        cursor += hyphenGap;
-                        TryAddChatter(plan, phrase, word, hyphenGapStart, hyphenGap, profile);
-
-                        segmentStartSample = cursor;
-                        segmentNoteStart = plan.Events.Count;
-                        segmentGrowlFrequency = 26f + ((word.Hash >> 4) & 0x0Fu);
-                    }
-
-                    var syllableSeed = MixSeed(_seed, word.Hash, (uint)syllableIndex);
-                    var random = new XorShift32(syllableSeed);
-                    var jitter = 0.90f + random.NextFloat() * 0.25f;
-
-                    var duration = 0.105f * phrase.TempoScale * wordLengthFactor * jitter;
-                    duration /= profile.SpeedMultiplier;
-                    duration *= syllable.IsStressed ? 1.16f : 0.93f;
-                    if (word.IsShout)
-                    {
-                        duration *= 0.92f;
-                    }
-
-                    if (word.Syllables.Count > 1)
-                    {
-                        // Multi-syllable words chatter a little faster, but without gaps.
-                        duration *= 0.94f + random.NextFloat() * 0.04f;
-                    }
-
-                    duration = Math.Clamp(duration, 0.045f, 0.50f);
-                    var length = Math.Max(1, Samples(duration));
-
-                    var baseFrequency =
-                        640f +
-                        70f * phrase.Emotion.Valence +
-                        150f * phrase.Emotion.Arousal +
-                        wordPitch +
-                        (jitter - 1f) * 120f * pitchSpread;
-
-                    if (word.IsShout)
-                    {
-                        baseFrequency += 130f;
-                    }
-
-                    if (syllable.IsStressed)
-                    {
-                        baseFrequency *= 1.05f;
-                    }
-
-                    baseFrequency = MapFrequency(baseFrequency, profile);
-
-                    var amplitude = 0.36f + 0.16f * phrase.Emotion.Arousal + (word.IsShout ? 0.10f : 0f);
-                    amplitude *= syllable.IsStressed ? 1.08f : 0.95f;
-                    amplitude = Math.Clamp(amplitude, 0.18f, 0.62f);
-
-                    var fmIndex =
-                        1.35f +
-                        1.15f * arousal +
-                        (word.IsShout ? 1.85f : 0f) +
-                        (syllable.HasVoicedOnset ? 0.55f : 0f) +
-                        (isExclamation ? 0.50f : 0f);
-                    fmIndex *= profile.FmIntensity;
-                    fmIndex = Math.Clamp(fmIndex, 0.20f, 6.50f);
-                    var fmIndex2 = fmIndex * (0.35f + 0.12f * jitter);
-
-                    var noise = syllable.HasSibilantOnset
-                        ? 0.09f + 0.05f * arousal
-                        : 0f;
-                    if (word.IsShout)
-                    {
-                        noise *= 1.25f;
-                    }
-
-                    var drive = word.IsShout
-                        ? 2.00f + 0.90f * arousal
-                        : 1f + 0.85f * arousal + (isExclamation ? 0.55f : 0f);
-                    var saturation = word.IsShout
-                        ? 0.50f + 0.15f * arousal
-                        : 0.10f + 0.28f * arousal + (isExclamation ? 0.16f : 0f);
-                    saturation = Math.Clamp(saturation, 0f, 0.72f);
-
-                    var trillDepth = 0f;
-                    var trillRate = 0f;
-                    var chatter = profile.ChatterProbability;
-                    if (chatter > 0f)
-                    {
-                        var energy =
-                            0.55f * valence +
-                            0.90f * arousal +
-                            (syllable.IsStressed ? 0.22f : 0f) +
-                            (word.IsShout ? 0.32f : 0f) +
-                            (isExclamation ? 0.22f : 0f);
-                        var trillChance = chatter * Math.Clamp(
-                            0.06f + 0.34f * energy + (duration >= 0.10f ? 0.08f : 0f),
-                            0f,
-                            0.75f);
-
-                        if (random.NextFloat() < trillChance)
-                        {
-                            // The signature "tr-r-rill!": a fast 30 Hz frequency wobble.
-                            trillDepth = 16f + 34f * Math.Clamp(energy, 0f, 1f) + random.NextFloat() * 10f;
-                            trillRate = 27f + random.NextFloat() * 8f;
-                        }
-                    }
-
-                    var growlDepth = syllable.HasVoicedOnset ? 0.20f : 0f;
-
-                    plan.Events.Add(new NoteEvent
-                    {
-                        StartSample = cursor,
-                        Length = length,
-                        StartFrequency = ClampFrequency(baseFrequency * 0.97f, profile),
-                        EndFrequency = baseFrequency,
-                        StartAmplitude = amplitude,
-                        Amplitude = amplitude,
-                        StartFmIndex = fmIndex,
-                        FmIndex = fmIndex,
-                        StartFmIndex2 = fmIndex2,
-                        FmIndex2 = fmIndex2,
-                        StartGrowlDepth = growlDepth,
-                        GrowlDepth = growlDepth,
-                        NoiseAmount = noise,
-                        HasVoicedOnset = syllable.HasVoicedOnset,
-                        Seed = syllableSeed,
-                        ModulatorRatio = 2f + (jitter - 1f) * 0.10f,
-                        ModulatorRatio2 = 3.07f + (jitter - 1f) * 0.35f,
-                        Drive = drive,
-                        Saturation = saturation,
-                        TrillDepth = trillDepth,
-                        TrillRate = trillRate,
-                    });
-
-                    TryAddWhistle(plan, phrase, word, syllable, syllableIndex, cursor, length, isExclamation, profile);
-
-                    cursor += length;
-                }
-
-                FinishLegatoSegment(
-                    plan,
-                    legatoRanges,
-                    segmentNoteStart,
-                    segmentStartSample,
-                    cursor,
-                    segmentGrowlFrequency,
-                    profile);
-            }
-
-            ApplyContour(plan.Events, phraseEventStart, phrase, profile);
-            cursor += Samples(phrase.Punctuation == PhrasePunctuation.Ellipsis ? 0.18f : 0.12f);
+            plan.TotalSamples = 0;
+            return plan;
         }
 
-        foreach (var (start, end) in legatoRanges)
-        {
-            LinkLegatoSegment(plan.Events, start, end);
-        }
+        var contexts = new SyllableContext[syllableCount];
+        var frames = new SyllableFrame[syllableCount];
 
-        plan.TotalSamples = plan.Events.Count == 0 ? 0 : cursor + Samples(0.15f);
+        SyllableContextBuilder.Build(phrases, _sampleRate, _seed, contexts);
+        _prosody.Predict(contexts, frames, profile);
+        Flatten(frames, plan);
+
+        var last = frames[^1];
+        plan.TotalSamples = last.StartSample
+            + last.LengthSamples
+            + last.PauseAfterSamples
+            + Samples(0.15f);
+
         return plan;
     }
 
-    private void FinishLegatoSegment(
-        SynthesisPlan plan,
-        List<(int Start, int End)> ranges,
-        int noteStart,
-        int sampleStart,
-        int sampleEnd,
-        float growlFrequency,
-        DroidVoiceProfile profile)
-    {
-        if (plan.Events.Count <= noteStart)
-        {
-            return;
-        }
-
-        ranges.Add((noteStart, plan.Events.Count));
-        ApplyWordEnvelope(
-            plan.Events,
-            noteStart,
-            plan.Events.Count,
-            sampleStart,
-            sampleEnd,
-            growlFrequency,
-            profile);
-    }
-
-    private void ApplyWordEnvelope(
-        List<NoteEvent> events,
-        int startIndex,
-        int endIndex,
-        int wordStartSample,
-        int wordEndSample,
-        float growlFrequency,
-        DroidVoiceProfile profile)
-    {
-        var duration = Math.Max(1, wordEndSample - wordStartSample) / (float)_sampleRate;
-
-        // The ADSR shape comes from the voice profile. Attack only on the first syllable,
-        // release only on the last one; shrink everything proportionally when a word is too
-        // short to fit the requested attack, decay and release.
-        var attack = profile.AttackSeconds;
-        var decay = profile.DecaySeconds;
-        var release = profile.ReleaseSeconds;
-        var sustain = profile.SustainLevel;
-
-        var envelopeTotal = attack + decay + release;
-        if (envelopeTotal > duration * 0.90f)
-        {
-            var scale = duration * 0.90f / envelopeTotal;
-            attack *= scale;
-            decay *= scale;
-            release *= scale;
-        }
-
-        for (var i = startIndex; i < endIndex; i++)
-        {
-            var note = events[i];
-            note.WordStartSample = wordStartSample;
-            note.WordEndSample = wordEndSample;
-            note.WordAttack = attack;
-            note.WordDecay = decay;
-            note.WordRelease = release;
-            note.SustainLevel = sustain;
-            note.GrowlFrequency = growlFrequency;
-            events[i] = note;
-        }
-    }
-
-    private static void LinkLegatoSegment(List<NoteEvent> events, int startIndex, int endIndex)
-    {
-        for (var i = startIndex + 1; i < endIndex; i++)
-        {
-            var previous = events[i - 1];
-            var note = events[i];
-
-            // The next syllable starts exactly where the previous one ended: frequency,
-            // amplitude and FM depth are all continuous across the joint.
-            note.StartFrequency = previous.EndFrequency;
-            note.StartAmplitude = previous.Amplitude;
-            note.StartFmIndex = previous.FmIndex;
-            note.StartFmIndex2 = previous.FmIndex2;
-            note.StartGrowlDepth = previous.GrowlDepth;
-            events[i] = note;
-        }
-    }
-
     /// <summary>
-    /// Adds a short high whistle or sob to stressed / emotional syllables. The probability and
-    /// intensity grow with positive valence, arousal, shouting and exclamation marks.
+    /// Turns the predictor's per-syllable frames into the flat render commands consumed by
+    /// <see cref="Render"/>. The order matches the v0.3.0 planner: gap chatter first, then the
+    /// syllable note, then its whistle.
     /// </summary>
-    private void TryAddWhistle(
-        SynthesisPlan plan,
-        Phrase phrase,
-        Word word,
-        Syllable syllable,
-        int syllableIndex,
-        int noteStart,
-        int noteLength,
-        bool isExclamation,
-        DroidVoiceProfile profile)
+    private static void Flatten(ReadOnlySpan<SyllableFrame> frames, SynthesisPlan plan)
     {
-        if (profile.WhistleProbability <= 0f)
+        foreach (var frame in frames)
         {
-            return;
-        }
-
-        var valence = MathF.Max(0f, phrase.Emotion.Valence);
-        var arousal = MathF.Max(0f, phrase.Emotion.Arousal);
-        var energy =
-            0.55f * valence +
-            0.90f * arousal +
-            (syllable.IsStressed ? 0.22f : 0f) +
-            (word.IsShout ? 0.32f : 0f) +
-            (isExclamation ? 0.22f : 0f);
-
-        if (!syllable.IsStressed && energy < 0.48f)
-        {
-            return;
-        }
-
-        var chance = Math.Clamp(
-            (0.05f + 0.50f * energy) * profile.WhistleProbability,
-            0f,
-            1f);
-        var random = new XorShift32(MixSeed(_seed, word.Hash, (uint)(0x500 + syllableIndex)));
-        if (random.NextFloat() >= chance)
-        {
-            return;
-        }
-
-        var duration = 0.032f + random.NextFloat() * 0.042f;
-        duration /= profile.SpeedMultiplier;
-        if (syllable.IsStressed)
-        {
-            duration *= 1.12f;
-        }
-
-        // Keep whistles inside the profile's high band while staying below Nyquist.
-        var whistleScale = Math.Clamp(profile.MaxFreq / 1600f, 0.55f, 1.60f);
-        var whistleMin = MathF.Max(600f, WhistleMinFrequency * whistleScale);
-        var whistleMax = MathF.Min(
-            WhistleMaxFrequency * whistleScale,
-            _sampleRate * 0.45f);
-        if (whistleMax <= whistleMin)
-        {
-            return;
-        }
-
-        var length = Math.Max(1, Samples(duration));
-        var rising = (random.NextUInt() & 1u) == 0u;
-        var low = (1440f + random.NextFloat() * 420f) * whistleScale;
-        var high = (1980f + random.NextFloat() * 560f) * whistleScale;
-        var startFrequency = rising ? low : high;
-        var endFrequency = rising ? high : low;
-
-        plan.Whistles.Add(new WhistleEvent
-        {
-            StartSample = noteStart + (int)(noteLength * (0.62f + 0.18f * random.NextFloat())),
-            Length = length,
-            StartFrequency = Math.Clamp(startFrequency, whistleMin, whistleMax),
-            EndFrequency = Math.Clamp(endFrequency, whistleMin, whistleMax),
-            Amplitude = 0.09f + 0.11f * Math.Clamp(energy, 0f, 1.1f),
-            VibratoDepth = rising
-                ? 12f + random.NextFloat() * 18f
-                : 28f + random.NextFloat() * 34f,
-            VibratoRate = rising
-                ? 18f + random.NextFloat() * 12f
-                : 7f + random.NextFloat() * 7f,
-            SobDepth = rising ? 0.06f : 0.18f,
-            Seed = MixSeed(_seed, word.Hash, (uint)(0x700 + syllableIndex)),
-        });
-    }
-
-    private void TryAddChatter(
-        SynthesisPlan plan,
-        Phrase phrase,
-        Word word,
-        int gapStart,
-        int gapLength,
-        DroidVoiceProfile profile)
-    {
-        if (gapLength <= 0 || profile.ChatterProbability <= 0f)
-        {
-            return;
-        }
-
-        var arousal = MathF.Max(0f, phrase.Emotion.Arousal);
-        var fast = arousal > 0.18f || phrase.SyllableCount >= 12 || word.IsShout;
-        if (!fast)
-        {
-            return;
-        }
-
-        var random = new XorShift32(MixSeed(_seed, word.Hash, 0xCA77E4u));
-        var chance = profile.ChatterProbability * (0.30f + 0.60f * arousal);
-        if (random.NextFloat() >= chance)
-        {
-            return;
-        }
-
-        var maxLength = Math.Min(gapLength, Samples(0.025f));
-        var minLength = Math.Min(maxLength, Samples(0.015f));
-        if (maxLength < minLength || maxLength <= 0)
-        {
-            return;
-        }
-
-        var length = minLength + (int)(random.NextUInt() % (uint)Math.Max(1, maxLength - minLength + 1));
-
-        if ((random.NextUInt() & 1u) == 0u)
-        {
-            // A tiny stepped arpeggio, like a relay bank cycling.
-            var baseFrequency = 700f + random.NextFloat() * 900f;
-            plan.Chatters.Add(new ChatterEvent
+            if (frame.Chatter.Present)
             {
-                StartSample = gapStart,
-                Length = length,
-                Kind = ChatterKind.Arpeggio,
-                Frequency1 = baseFrequency,
-                Frequency2 = baseFrequency * (1.20f + random.NextFloat() * 0.25f),
-                Frequency3 = baseFrequency * (1.55f + random.NextFloat() * 0.35f),
-                StepCount = 2 + (int)(random.NextUInt() % 2u),
-                Amplitude = 0.09f + 0.06f * arousal,
-                Seed = MixSeed(_seed, word.Hash, 0xC0DEu),
-            });
-        }
-        else
-        {
-            // A mechanical relay click with a sharp downward frequency drop.
-            plan.Chatters.Add(new ChatterEvent
-            {
-                StartSample = gapStart,
-                Length = length,
-                Kind = ChatterKind.RelayClick,
-                StartFrequency = 1800f + random.NextFloat() * 1200f,
-                EndFrequency = 180f + random.NextFloat() * 220f,
-                Amplitude = 0.10f + 0.08f * arousal,
-                Seed = MixSeed(_seed, word.Hash, 0xC11Cu),
-            });
-        }
-    }
-
-    private void ApplyContour(
-        List<NoteEvent> events,
-        int phraseStart,
-        Phrase phrase,
-        DroidVoiceProfile profile)
-    {
-        if (events.Count <= phraseStart)
-        {
-            return;
-        }
-
-        if (phrase.Punctuation == PhrasePunctuation.Question)
-        {
-            var from = Math.Max(phraseStart, events.Count - 2);
-            for (var i = from; i < events.Count; i++)
-            {
-                var note = events[i];
-                var isLast = i == events.Count - 1;
-                note.StartFrequency = ClampFrequency(
-                    note.StartFrequency * (isLast ? 1.10f : 1.00f),
-                    profile);
-                note.EndFrequency = ClampFrequency(
-                    note.EndFrequency * (isLast ? 1.42f : 1.18f),
-                    profile);
-
-                if (note.EndFrequency <= note.StartFrequency)
+                plan.Chatters.Add(new ChatterEvent
                 {
-                    note.EndFrequency = ClampFrequency(note.StartFrequency * 1.12f, profile);
-                }
+                    StartSample = frame.StartSample + frame.Chatter.StartOffsetSamples,
+                    Length = frame.Chatter.LengthSamples,
+                    Kind = frame.Chatter.Kind,
+                    Frequency1 = frame.Chatter.Frequency1,
+                    Frequency2 = frame.Chatter.Frequency2,
+                    Frequency3 = frame.Chatter.Frequency3,
+                    StepCount = frame.Chatter.StepCount,
+                    StartFrequency = frame.Chatter.StartFrequency,
+                    EndFrequency = frame.Chatter.EndFrequency,
+                    Amplitude = frame.Chatter.Amplitude,
+                    Seed = frame.Chatter.Seed,
+                });
+            }
 
-                events[i] = note;
-            }
-        }
-        else if (phrase.Punctuation == PhrasePunctuation.Ellipsis)
-        {
-            var from = Math.Max(phraseStart, events.Count - 2);
-            for (var i = from; i < events.Count; i++)
+            plan.Events.Add(new NoteEvent
             {
-                var note = events[i];
-                var isLast = i == events.Count - 1;
-                note.StartFrequency = ClampFrequency(
-                    note.StartFrequency * (isLast ? 0.90f : 0.97f),
-                    profile);
-                note.EndFrequency = ClampFrequency(
-                    note.EndFrequency * (isLast ? 0.68f : 0.82f),
-                    profile);
-                events[i] = note;
+                StartSample = frame.StartSample,
+                Length = frame.LengthSamples,
+                StartFrequency = frame.StartFreq,
+                EndFrequency = frame.EndFreq,
+                StartAmplitude = frame.StartGain,
+                Amplitude = frame.Gain,
+                StartFmIndex = frame.StartFmDepth,
+                FmIndex = frame.FmDepth,
+                StartFmIndex2 = frame.StartFmDepth2,
+                FmIndex2 = frame.FmDepth2,
+                StartGrowlDepth = frame.StartGrowlIntensity,
+                GrowlDepth = frame.GrowlIntensity,
+                GrowlFrequency = frame.GrowlFrequency,
+                NoiseAmount = frame.NoiseMix,
+                HasVoicedOnset = frame.HasVoicedOnset,
+                Seed = frame.Seed,
+                ModulatorRatio = frame.FmRatio,
+                ModulatorRatio2 = frame.FmRatio2,
+                Drive = frame.Drive,
+                Saturation = frame.Saturation,
+                WordStartSample = frame.WordStartSample,
+                WordEndSample = frame.WordEndSample,
+                WordAttack = frame.AttackTime,
+                WordDecay = frame.DecayTime,
+                WordRelease = frame.ReleaseTime,
+                SustainLevel = frame.SustainLevel,
+                TrillDepth = frame.TrillDepth,
+                TrillRate = frame.TrillRate,
+            });
+
+            if (frame.Whistle.Present)
+            {
+                plan.Whistles.Add(new WhistleEvent
+                {
+                    StartSample = frame.StartSample + frame.Whistle.StartOffsetSamples,
+                    Length = frame.Whistle.LengthSamples,
+                    StartFrequency = frame.Whistle.StartFrequency,
+                    EndFrequency = frame.Whistle.EndFrequency,
+                    Amplitude = frame.Whistle.Amplitude,
+                    VibratoDepth = frame.Whistle.VibratoDepth,
+                    VibratoRate = frame.Whistle.VibratoRate,
+                    SobDepth = frame.Whistle.SobDepth,
+                    Seed = frame.Whistle.Seed,
+                });
             }
-        }
-        else
-        {
-            var last = events[^1];
-            last.EndFrequency = ClampFrequency(last.EndFrequency * 0.92f, profile);
-            events[^1] = last;
         }
     }
 
@@ -1079,39 +655,8 @@ public sealed class DroidSynthesizer
         }
     }
 
-    private static float ClampFrequency(float frequency, DroidVoiceProfile profile) =>
-        Math.Clamp(frequency, profile.MinFreq, profile.MaxFreq);
-
-    /// <summary>
-    /// Maps a frequency expressed in the classic R2 range into the profile's own range.
-    /// The mapping is linear, so relative pitch relationships are preserved.
-    /// </summary>
-    private static float MapFrequency(float frequency, DroidVoiceProfile profile)
-    {
-        var normalized = Math.Clamp(
-            (frequency - MinFrequency) / (MaxFrequency - MinFrequency),
-            0f,
-            1f);
-
-        return Math.Clamp(
-            profile.MinFreq + normalized * (profile.MaxFreq - profile.MinFreq),
-            profile.MinFreq,
-            profile.MaxFreq);
-    }
-
     private int Samples(float seconds) =>
         Math.Max(0, (int)MathF.Round(seconds * _sampleRate));
-
-    private static uint MixSeed(uint globalSeed, uint wordHash, uint syllableIndex)
-    {
-        var value = globalSeed ^ (wordHash * 0x9E3779B1u) ^ ((syllableIndex + 1u) * 0x85EBCA77u);
-        value ^= value >> 16;
-        value *= 0x7FEB352Du;
-        value ^= value >> 15;
-        value *= 0x846CA68Bu;
-        value ^= value >> 16;
-        return value;
-    }
 
     internal sealed class SynthesisPlan
     {
@@ -1156,12 +701,6 @@ public sealed class DroidSynthesizer
         public float TrillRate;
     }
 
-    internal enum ChatterKind
-    {
-        Arpeggio,
-        RelayClick,
-    }
-
     internal struct ChatterEvent
     {
         public int StartSample;
@@ -1188,27 +727,5 @@ public sealed class DroidSynthesizer
         public float VibratoRate;
         public float SobDepth;
         public uint Seed;
-    }
-
-    private struct XorShift32
-    {
-        private uint _state;
-
-        public XorShift32(uint seed)
-        {
-            _state = seed == 0 ? 0x9E3779B9u : seed;
-        }
-
-        public uint NextUInt()
-        {
-            var value = _state;
-            value ^= value << 13;
-            value ^= value >> 17;
-            value ^= value << 5;
-            _state = value;
-            return value;
-        }
-
-        public float NextFloat() => (NextUInt() >> 8) * (1f / 16777216f);
     }
 }

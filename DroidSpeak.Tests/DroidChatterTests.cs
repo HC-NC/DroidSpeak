@@ -1,5 +1,6 @@
 using DroidSpeak.DSP;
 using DroidSpeak.NLP;
+using DroidSpeak.Prosody;
 
 namespace DroidSpeak.Tests;
 
@@ -40,7 +41,7 @@ public class DroidChatterTests
             Assert.InRange(chatter.Length, 600, 1105);
             Assert.InRange(chatter.Amplitude, 0.05f, 0.25f);
 
-            if (chatter.Kind == DroidSynthesizer.ChatterKind.Arpeggio)
+            if (chatter.Kind == ChatterKind.Arpeggio)
             {
                 Assert.InRange(chatter.StepCount, 2, 3);
                 Assert.True(chatter.Frequency1 > 0f);
