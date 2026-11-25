@@ -31,6 +31,11 @@ public class DroidVoiceProfileTests
             Assert.InRange(profile.FilterCutoffMultiplier, 0.80f, 4.00f);
             Assert.InRange(profile.FilterResonance, 0.50f, 4.00f);
             Assert.InRange(profile.WhistleProbability, 0.00f, 1.50f);
+            Assert.InRange(profile.FormantMix, 0.00f, 1.00f);
+            Assert.InRange(profile.RingModMix, 0.00f, 1.00f);
+            Assert.InRange(profile.SaturationDrive, 0.00f, 4.00f);
+            Assert.InRange(profile.RoomMix, 0.00f, 1.00f);
+            Assert.InRange(profile.PitchCurve, 0.00f, 1.00f);
         }
     }
 
@@ -78,6 +83,11 @@ public class DroidVoiceProfileTests
             FilterCutoffMultiplier = 2.20f,
             FilterResonance = 1.90f,
             WhistleProbability = 1.25f,
+            FormantMix = 0.62f,
+            RingModMix = 0.31f,
+            SaturationDrive = 1.70f,
+            RoomMix = 0.24f,
+            PitchCurve = 0.55f,
         };
 
         var json = expected.ToJson();
@@ -103,6 +113,11 @@ public class DroidVoiceProfileTests
         Assert.Contains("\"FilterCutoffMultiplier\"", json);
         Assert.Contains("\"FilterResonance\"", json);
         Assert.Contains("\"WhistleProbability\"", json);
+        Assert.Contains("\"FormantMix\"", json);
+        Assert.Contains("\"RingModMix\"", json);
+        Assert.Contains("\"SaturationDrive\"", json);
+        Assert.Contains("\"RoomMix\"", json);
+        Assert.Contains("\"PitchCurve\"", json);
 
         using var document = JsonDocument.Parse(json);
         Assert.Equal(JsonValueKind.Object, document.RootElement.ValueKind);
@@ -135,6 +150,13 @@ public class DroidVoiceProfileTests
     [InlineData("{\"MinFreq\":100,\"MaxFreq\":400,\"FilterResonance\":5}")]
     [InlineData("{\"MinFreq\":100,\"MaxFreq\":400,\"WhistleProbability\":1.6}")]
     [InlineData("{\"MinFreq\":100,\"MaxFreq\":400,\"WhistleProbability\":-0.1}")]
+    [InlineData("{\"MinFreq\":100,\"MaxFreq\":400,\"FormantMix\":1.1}")]
+    [InlineData("{\"MinFreq\":100,\"MaxFreq\":400,\"FormantMix\":-0.1}")]
+    [InlineData("{\"MinFreq\":100,\"MaxFreq\":400,\"RingModMix\":2}")]
+    [InlineData("{\"MinFreq\":100,\"MaxFreq\":400,\"SaturationDrive\":-1}")]
+    [InlineData("{\"MinFreq\":100,\"MaxFreq\":400,\"SaturationDrive\":4.5}")]
+    [InlineData("{\"MinFreq\":100,\"MaxFreq\":400,\"RoomMix\":1.5}")]
+    [InlineData("{\"MinFreq\":100,\"MaxFreq\":400,\"PitchCurve\":-0.2}")]
     public void FromJson_RejectsInvalidValues(string json)
     {
         Assert.Throws<ArgumentOutOfRangeException>(() => DroidVoiceProfile.FromJson(json));
@@ -164,6 +186,11 @@ public class DroidVoiceProfileTests
         Assert.Equal(1.65f, profile.FilterCutoffMultiplier);
         Assert.Equal(1.45f, profile.FilterResonance);
         Assert.Equal(1.00f, profile.WhistleProbability);
+        Assert.Equal(0f, profile.FormantMix);
+        Assert.Equal(0f, profile.RingModMix);
+        Assert.Equal(0f, profile.SaturationDrive);
+        Assert.Equal(0f, profile.RoomMix);
+        Assert.Equal(0f, profile.PitchCurve);
     }
 
     [Fact]
@@ -184,6 +211,11 @@ public class DroidVoiceProfileTests
             FilterCutoffMultiplier = 0.1f,
             FilterResonance = 100f,
             WhistleProbability = 9f,
+            FormantMix = 3f,
+            RingModMix = -2f,
+            SaturationDrive = 9f,
+            RoomMix = 4f,
+            PitchCurve = -1f,
         };
 
         var normalized = wild.Normalized();
@@ -202,6 +234,11 @@ public class DroidVoiceProfileTests
         Assert.Equal(0.80f, normalized.FilterCutoffMultiplier);
         Assert.Equal(4.00f, normalized.FilterResonance);
         Assert.Equal(1.50f, normalized.WhistleProbability);
+        Assert.Equal(1.00f, normalized.FormantMix);
+        Assert.Equal(0.00f, normalized.RingModMix);
+        Assert.Equal(4.00f, normalized.SaturationDrive);
+        Assert.Equal(1.00f, normalized.RoomMix);
+        Assert.Equal(0.00f, normalized.PitchCurve);
     }
 
     [Fact]
@@ -216,6 +253,11 @@ public class DroidVoiceProfileTests
             FilterCutoffMultiplier = float.PositiveInfinity,
             FilterResonance = float.NaN,
             WhistleProbability = float.NegativeInfinity,
+            FormantMix = float.NaN,
+            RingModMix = float.PositiveInfinity,
+            SaturationDrive = float.NaN,
+            RoomMix = float.NegativeInfinity,
+            PitchCurve = float.NaN,
         };
 
         var normalized = wild.Normalized();
@@ -227,6 +269,11 @@ public class DroidVoiceProfileTests
         Assert.Equal(4.00f, normalized.FilterCutoffMultiplier);
         Assert.Equal(1.45f, normalized.FilterResonance);
         Assert.Equal(0.00f, normalized.WhistleProbability);
+        Assert.Equal(0.00f, normalized.FormantMix);
+        Assert.Equal(1.00f, normalized.RingModMix);
+        Assert.Equal(0.00f, normalized.SaturationDrive);
+        Assert.Equal(0.00f, normalized.RoomMix);
+        Assert.Equal(0.00f, normalized.PitchCurve);
     }
 
     [Fact]
@@ -237,6 +284,47 @@ public class DroidVoiceProfileTests
         var tiny = new DroidSynthesizer(seed: 5, profile: DroidVoiceProfile.Tiny).Synthesize(text);
 
         Assert.False(r2.AsSpan().SequenceEqual(tiny));
+    }
+
+    [Fact]
+    public void NeutralV05Parameters_LeaveAudioUntouched()
+    {
+        const string text = "Бип-буп, R2!";
+        var classic = new DroidSynthesizer(seed: 9, profile: DroidVoiceProfile.R2);
+        var neutral = new DroidSynthesizer(seed: 9, profile: DroidVoiceProfile.R2 with
+        {
+            FormantMix = 0f,
+            RingModMix = 0f,
+            SaturationDrive = 0f,
+            RoomMix = 0f,
+            PitchCurve = 0f,
+        });
+
+        Assert.Equal(classic.Synthesize(text), neutral.Synthesize(text));
+    }
+
+    [Fact]
+    public void RoomMixAndSaturation_ChangeRenderedAudioWithoutChangingLength()
+    {
+        const string text = "Тревога!";
+        var dry = new DroidSynthesizer(seed: 5, profile: DroidVoiceProfile.R2);
+        var wet = new DroidSynthesizer(seed: 5, profile: DroidVoiceProfile.R2 with
+        {
+            RoomMix = 0.65f,
+            SaturationDrive = 2.20f,
+        });
+
+        var dryAudio = dry.Synthesize(text);
+        var wetAudio = wet.Synthesize(text);
+
+        Assert.Equal(dryAudio.Length, wetAudio.Length);
+        Assert.False(dryAudio.AsSpan().SequenceEqual(wetAudio));
+
+        foreach (var sample in wetAudio)
+        {
+            Assert.True(float.IsFinite(sample));
+            Assert.InRange(sample, -1f, 1f);
+        }
     }
 
     [Fact]

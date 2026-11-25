@@ -404,6 +404,26 @@ public sealed class DroidSynthesizer
             RenderChatter(frame, buffer.Slice(startSample, count));
         }
 
+        VoicePostProcessor.ApplyAnalogSaturation(buffer, profile.SaturationDrive);
+
+        if (profile.RoomMix > 0f)
+        {
+            // The delay line is bounded by the 192 kHz maximum (~10 KB), so it stays on the stack
+            // and the render path remains allocation free.
+            var firstTap = VoicePostProcessor.FirstTapSamples(_sampleRate);
+            var secondTap = VoicePostProcessor.SecondTapSamples(_sampleRate);
+            Span<float> line = stackalloc float[secondTap + 1];
+            line.Clear();
+            var index = 0;
+            VoicePostProcessor.ApplyEarlyReflections(
+                buffer,
+                line,
+                ref index,
+                profile.RoomMix,
+                firstTap,
+                secondTap);
+        }
+
         ApplyDynamicLowPassFilter(buffer, profile);
         ApplyPeakCeiling(buffer);
     }

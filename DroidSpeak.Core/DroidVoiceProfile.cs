@@ -59,6 +59,34 @@ public sealed record DroidVoiceProfile
     /// </summary>
     public float WhistleProbability { get; init; } = 1.00f;
 
+    /// <summary>
+    /// Strength of the parallel vowel formant bank (0.00–1.00). <c>0</c> keeps the classic
+    /// FM-only timbre.
+    /// </summary>
+    public float FormantMix { get; init; } = 0f;
+
+    /// <summary>
+    /// Strength of the inharmonic ring modulator (0.00–1.00). Adds metallic sidebands.
+    /// </summary>
+    public float RingModMix { get; init; } = 0f;
+
+    /// <summary>
+    /// Analog soft-clipping drive applied before the resonant low-pass (0.00–4.00).
+    /// <c>0</c> leaves the signal untouched.
+    /// </summary>
+    public float SaturationDrive { get; init; } = 0f;
+
+    /// <summary>
+    /// Early-reflection / micro-reverb send (0.00–1.00). <c>0</c> keeps the voice completely dry.
+    /// </summary>
+    public float RoomMix { get; init; } = 0f;
+
+    /// <summary>
+    /// Amount of three-point pitch curvature the prosody model may add (0.00–1.00).
+    /// <c>0</c> keeps straight start-to-end glides.
+    /// </summary>
+    public float PitchCurve { get; init; } = 0f;
+
     /// <summary>Classic bright astromech, the default voice.</summary>
     public static DroidVoiceProfile R2 { get; } = new();
 
@@ -141,6 +169,11 @@ public sealed record DroidVoiceProfile
             FilterCutoffMultiplier = model.FilterCutoffMultiplier ?? defaults.FilterCutoffMultiplier,
             FilterResonance = model.FilterResonance ?? defaults.FilterResonance,
             WhistleProbability = model.WhistleProbability ?? defaults.WhistleProbability,
+            FormantMix = model.FormantMix ?? defaults.FormantMix,
+            RingModMix = model.RingModMix ?? defaults.RingModMix,
+            SaturationDrive = model.SaturationDrive ?? defaults.SaturationDrive,
+            RoomMix = model.RoomMix ?? defaults.RoomMix,
+            PitchCurve = model.PitchCurve ?? defaults.PitchCurve,
         };
 
         profile.Validate();
@@ -163,6 +196,11 @@ public sealed record DroidVoiceProfile
         var cutoff = ClampFinite(FilterCutoffMultiplier, 0.80f, 4.00f, 1.65f);
         var resonance = ClampFinite(FilterResonance, 0.50f, 4.00f, 1.45f);
         var whistle = ClampFinite(WhistleProbability, 0.00f, 1.50f, 1.00f);
+        var formant = ClampFinite(FormantMix, 0.00f, 1.00f, 0f);
+        var ring = ClampFinite(RingModMix, 0.00f, 1.00f, 0f);
+        var saturationDrive = ClampFinite(SaturationDrive, 0.00f, 4.00f, 0f);
+        var room = ClampFinite(RoomMix, 0.00f, 1.00f, 0f);
+        var pitchCurve = ClampFinite(PitchCurve, 0.00f, 1.00f, 0f);
 
         // Hot paths call this on every render; avoid a record copy when nothing needs clamping.
         if (min == MinFreq &&
@@ -177,7 +215,12 @@ public sealed record DroidVoiceProfile
             release == ReleaseSeconds &&
             cutoff == FilterCutoffMultiplier &&
             resonance == FilterResonance &&
-            whistle == WhistleProbability)
+            whistle == WhistleProbability &&
+            formant == FormantMix &&
+            ring == RingModMix &&
+            saturationDrive == SaturationDrive &&
+            room == RoomMix &&
+            pitchCurve == PitchCurve)
         {
             return this;
         }
@@ -197,6 +240,11 @@ public sealed record DroidVoiceProfile
             FilterCutoffMultiplier = cutoff,
             FilterResonance = resonance,
             WhistleProbability = whistle,
+            FormantMix = formant,
+            RingModMix = ring,
+            SaturationDrive = saturationDrive,
+            RoomMix = room,
+            PitchCurve = pitchCurve,
         };
     }
 
@@ -255,6 +303,11 @@ public sealed record DroidVoiceProfile
         ValidateRange(FilterCutoffMultiplier, 0.80f, 4.00f, nameof(FilterCutoffMultiplier));
         ValidateRange(FilterResonance, 0.50f, 4.00f, nameof(FilterResonance));
         ValidateRange(WhistleProbability, 0.00f, 1.50f, nameof(WhistleProbability));
+        ValidateRange(FormantMix, 0.00f, 1.00f, nameof(FormantMix));
+        ValidateRange(RingModMix, 0.00f, 1.00f, nameof(RingModMix));
+        ValidateRange(SaturationDrive, 0.00f, 4.00f, nameof(SaturationDrive));
+        ValidateRange(RoomMix, 0.00f, 1.00f, nameof(RoomMix));
+        ValidateRange(PitchCurve, 0.00f, 1.00f, nameof(PitchCurve));
     }
 
     private static void ValidateRange(float value, float min, float max, string name)
@@ -310,4 +363,14 @@ internal sealed class DroidVoiceProfileJsonModel
     public float? FilterResonance { get; init; }
 
     public float? WhistleProbability { get; init; }
+
+    public float? FormantMix { get; init; }
+
+    public float? RingModMix { get; init; }
+
+    public float? SaturationDrive { get; init; }
+
+    public float? RoomMix { get; init; }
+
+    public float? PitchCurve { get; init; }
 }

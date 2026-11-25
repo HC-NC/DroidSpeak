@@ -33,6 +33,10 @@ public sealed class DroidSpeechStream
     // Continuous oscillator, ring-modulator and formant filter state across chunks.
     private VoiceState _voice;
 
+    // Early-reflection delay line, allocated on the first read when the profile has room ambience.
+    private float[]? _reflectionLine;
+    private int _reflectionIndex;
+
     // Continuous 2-pole SVF low-pass filter state across chunks.
     private float _filterLow;
     private float _filterBand;
@@ -68,6 +72,12 @@ public sealed class DroidSpeechStream
         _whistleCursor = 0;
         _chatterCursor = 0;
         _voice.Reset();
+        _reflectionIndex = 0;
+        if (_reflectionLine is not null)
+        {
+            Array.Clear(_reflectionLine);
+        }
+
         _filterLow = 0f;
         _filterBand = 0f;
         _envFollower = 0f;
@@ -94,6 +104,8 @@ public sealed class DroidSpeechStream
         RenderWhistlesInRange(chunkStart, chunkEnd, target);
         RenderChattersInRange(chunkStart, chunkEnd, target);
 
+        VoicePostProcessor.ApplyAnalogSaturation(target, _profile.SaturationDrive);
+        ApplyEarlyReflections(target);
         ApplyStatefulLowPassFilter(target);
         ApplySoftCeiling(target);
 
@@ -314,12 +326,30 @@ public sealed class DroidSpeechStream
         }
     }
 
+    private void ApplyEarlyReflections(Span<float> buffer)
+    {
+        if (_profile.RoomMix <= 0f || buffer.IsEmpty)
+        {
+            return;
+        }
+
+        // One delay line per stream, so reflections continue seamlessly across chunk boundaries.
+        _reflectionLine ??= new float[VoicePostProcessor.ReflectionLineLength(_sampleRate)];
+
+        VoicePostProcessor.ApplyEarlyReflections(
+            buffer,
+            _reflectionLine,
+            ref _reflectionIndex,
+            _profile.RoomMix,
+            VoicePostProcessor.FirstTapSamples(_sampleRate),
+            VoicePostProcessor.SecondTapSamples(_sampleRate));
+    }
+
     /// <summary>
     /// 2-pole resonant state-variable low-pass filter with an envelope follower. The filter state
     /// lives on the stream, so the cutoff breathes continuously across chunk boundaries.
     /// </summary>
-    private void ApplyStatefulLowPassFilter(Span<float> buffer)
-    {
+    private void ApplyStatefulLowPassFilter(Span<float> buffer)    {
         if (buffer.IsEmpty)
         {
             return;
