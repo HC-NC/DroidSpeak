@@ -424,3 +424,8 @@ FodyWeavers.xsd
 
 # Official VS Code C# Dev Kit Extension exclusion
 #*.lscache
+
+# Local v0.8 artifacts: distilled checkpoints and extracted acoustic datasets are developer-local,
+# reproducible from the CLI, and must never pollute git status.
+*.dsbrain
+*.dsdata
