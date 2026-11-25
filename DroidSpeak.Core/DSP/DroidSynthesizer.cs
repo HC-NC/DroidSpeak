@@ -293,6 +293,7 @@ public sealed class DroidSynthesizer
                 StartSample = frame.StartSample,
                 Length = frame.LengthSamples,
                 StartFrequency = frame.StartFreq,
+                MidFrequency = frame.MidFreq,
                 EndFrequency = frame.EndFreq,
                 StartAmplitude = frame.StartGain,
                 Amplitude = frame.Gain,
@@ -312,6 +313,7 @@ public sealed class DroidSynthesizer
                 FormantF1 = frame.FormantF1,
                 FormantF2 = frame.FormantF2,
                 FormantMix = frame.FormantMix,
+                AttackChirp = frame.AttackChirp,
                 Drive = frame.Drive,
                 Saturation = frame.Saturation,
                 WordStartSample = frame.WordStartSample,
@@ -417,6 +419,7 @@ public sealed class DroidSynthesizer
             StartSample = frame.StartSample,
             Length = frame.LengthSamples,
             StartFrequency = frame.StartFreq,
+            MidFrequency = frame.MidFreq,
             EndFrequency = frame.EndFreq,
             StartAmplitude = frame.StartGain,
             Amplitude = frame.Gain,
@@ -446,6 +449,7 @@ public sealed class DroidSynthesizer
             FormantF1 = frame.FormantF1,
             FormantF2 = frame.FormantF2,
             FormantMix = frame.FormantMix,
+            AttackChirp = frame.AttackChirp,
         };
 
         NoteRenderer.Render(note, 0, target, ref voice, profile.TriangleMix, _sampleRate);
@@ -723,6 +727,7 @@ public sealed class DroidSynthesizer
         public int StartSample;
         public int Length;
         public float StartFrequency;
+        public float MidFrequency;
         public float EndFrequency;
         public float StartAmplitude;
         public float Amplitude;
@@ -742,6 +747,7 @@ public sealed class DroidSynthesizer
         public float FormantF1;
         public float FormantF2;
         public float FormantMix;
+        public float AttackChirp;
         public float Drive;
         public float Saturation;
         public int WordStartSample;

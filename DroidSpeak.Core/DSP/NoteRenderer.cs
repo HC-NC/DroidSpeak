@@ -1,4 +1,4 @@
-namespace DroidSpeak.DSP;
+﻿namespace DroidSpeak.DSP;
 
 /// <summary>
 /// Renders a single syllable note. The offline <see cref="DroidSynthesizer"/> and the streaming
@@ -18,6 +18,9 @@ internal static class NoteRenderer
 
     /// <summary>Number of samples between formant coefficient updates.</summary>
     private const int FormantBlockSize = 16;
+
+    /// <summary>Duration of the pitch-attack chirp in seconds.</summary>
+    private const float AttackChirpSeconds = 0.014f;
 
     /// <summary>Makeup gain that compensates for the narrow band-pass responses.</summary>
     private const float FormantGain = 1.55f;
@@ -56,6 +59,19 @@ internal static class NoteRenderer
         var formantMix = Math.Clamp(note.FormantMix, 0f, 1f);
         var ringModMix = Math.Clamp(note.RingModMix, 0f, 1f);
 
+        // A three-point contour is expressed as a logarithmic bulge away from the straight
+        // Start -> End glide. A zero bulge is the legacy path and stays bit-identical.
+        var midBulge = 0f;
+        if (note.MidFrequency > 0f && note.StartFrequency > 0f && note.EndFrequency > 0f)
+        {
+            midBulge = MathF.Log(note.MidFrequency)
+                - 0.5f * (MathF.Log(note.StartFrequency) + MathF.Log(note.EndFrequency));
+            if (MathF.Abs(midBulge) < 1e-6f)
+            {
+                midBulge = 0f;
+            }
+        }
+
         for (var k = 0; k < target.Length; k++)
         {
             var n = startOffset + k;
@@ -70,9 +86,28 @@ internal static class NoteRenderer
             // Pitch is perceived logarithmically, so glide exponentially between frequencies.
             var frequency = note.StartFrequency * MathF.Pow(frequencyRatio, curveT);
 
-            // Bell-shaped onset scoop (starts and ends at zero, so no click).
-            if (timeInWord < 0.022f)
+            if (midBulge != 0f)
             {
+                // sin(pi * t) is zero at both ends and peaks at the midpoint, so the contour still
+                // starts on StartFrequency and lands exactly on EndFrequency while passing through
+                // MidFreq at t = 0.5.
+                var bend = MathF.Sin(MathF.PI * position);
+                frequency = MathF.Exp(MathF.Log(frequency) + midBulge * bend);
+            }
+
+            if (note.AttackChirp != 0f)
+            {
+                // Fast, energy-driven onset chirp. The bell shape starts and ends at zero, so the
+                // pitch never jumps and no click is introduced.
+                if (timeInWord < AttackChirpSeconds)
+                {
+                    var chirpPhase = timeInWord / AttackChirpSeconds;
+                    frequency *= 1f + note.AttackChirp * MathF.Sin(MathF.PI * chirpPhase);
+                }
+            }
+            else if (timeInWord < 0.022f)
+            {
+                // Bell-shaped legacy onset scoop (starts and ends at zero, so no click).
                 var scoopPhase = timeInWord / 0.022f;
                 var direction = (note.Seed & 1u) == 0u ? -0.045f : 0.040f;
                 frequency *= 1f + direction * MathF.Sin(MathF.PI * scoopPhase);

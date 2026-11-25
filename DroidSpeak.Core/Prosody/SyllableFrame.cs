@@ -9,9 +9,10 @@ namespace DroidSpeak.Prosody;
 /// lets the rule-based predictor reproduce the old audio bit-for-bit.
 /// </para>
 /// <para>
-/// <see cref="MidFreq"/>, <see cref="RingModMix"/>, <see cref="FormantF1"/>, <see cref="FormantF2"/>
-/// and <see cref="FormantMix"/> are reserved for the v0.5 expressive layer. The v0.4 renderer
-/// ignores them.
+/// <see cref="MidFreq"/> curves the pitch contour, <see cref="RingModMix"/>,
+/// <see cref="FormantF1"/>, <see cref="FormantF2"/>, <see cref="FormantMix"/> and
+/// <see cref="AttackChirp"/> drive the v0.5 expressive layer. All of them default to zero, which
+/// keeps the renderer on the bit-identical v0.4 path.
 /// </para>
 /// </summary>
 public struct SyllableFrame
@@ -40,7 +41,12 @@ public struct SyllableFrame
     /// <summary>Glide start frequency in Hz.</summary>
     public float StartFreq;
 
-    /// <summary>Reserved for v0.5 contour curvature. Ignored by the v0.4 renderer.</summary>
+    /// <summary>
+    /// Pitch at the midpoint of the contour, in Hz. <c>0</c> keeps the legacy two-point glide;
+    /// a value above or below the geometric mean of <see cref="StartFreq"/> and
+    /// <see cref="EndFreq"/> bends the glide into an arc that still starts and ends exactly on
+    /// the requested frequencies.
+    /// </summary>
     public float MidFreq;
 
     /// <summary>Glide end frequency in Hz.</summary>
@@ -84,6 +90,12 @@ public struct SyllableFrame
 
     /// <summary>Reserved for v0.5 ring modulation. Ignored by the v0.4 renderer.</summary>
     public float RingModMix;
+
+    /// <summary>
+    /// Signed strength of the 14 ms pitch-attack chirp (for example <c>0.12</c> for a 12 %
+    /// upward chirp). <c>0</c> keeps the legacy onset scoop.
+    /// </summary>
+    public float AttackChirp;
 
     /// <summary>Reserved for v0.5 formant shaping. Ignored by the v0.4 renderer.</summary>
     public float FormantF1;

@@ -115,8 +115,174 @@ public class DspTests
         }
     }
 
-    private static float ResponseRms(float center, float tone, int sampleRate)
+    [Fact]
+    public void PitchCurve_PassesThroughMidFrequency()
     {
+        var legacy = Note(length: 8820);
+        var curved = Note(length: 8820);
+        curved.MidFrequency = 1500f;
+        legacy.StartFrequency = 600f;
+        legacy.EndFrequency = 600f;
+        curved.StartFrequency = 600f;
+        curved.EndFrequency = 600f;
+
+        var flatAudio = RenderNote(legacy);
+        var curvedAudio = RenderNote(curved);
+
+        var flatMiddle = ZeroCrossings(flatAudio, 3600, 5200);
+        var curvedMiddle = ZeroCrossings(curvedAudio, 3600, 5200);
+
+        Assert.True(
+            curvedMiddle > flatMiddle * 1.5f,
+            $"Expected a higher midpoint pitch ({curvedMiddle}) than the flat glide ({flatMiddle}).");
+    }
+
+    [Fact]
+    public void PitchCurve_GeometricMidpointKeepsTheLegacyGlide()
+    {
+        var legacy = Note(length: 4410);
+        legacy.StartFrequency = 500f;
+        legacy.EndFrequency = 900f;
+
+        var neutral = Note(length: 4410);
+        neutral.StartFrequency = 500f;
+        neutral.EndFrequency = 900f;
+        neutral.MidFrequency = MathF.Sqrt(500f * 900f);
+
+        Assert.Equal(RenderNote(legacy), RenderNote(neutral));
+    }
+
+    [Fact]
+    public void AttackChirp_RaisesTheOnsetPitchAndLeavesTheTailAlone()
+    {
+        var legacy = Note(length: 8820);
+        var chirped = Note(length: 8820);
+        chirped.AttackChirp = 0.35f;
+
+        var legacyAudio = RenderNote(legacy);
+        var chirpedAudio = RenderNote(chirped);
+
+        var onsetLegacy = ZeroCrossings(legacyAudio, 0, 400);
+        var onsetChirped = ZeroCrossings(chirpedAudio, 0, 400);
+        var tailLegacy = ZeroCrossings(legacyAudio, 4410, 8820);
+        var tailChirped = ZeroCrossings(chirpedAudio, 4410, 8820);
+
+        Assert.True(onsetChirped > onsetLegacy, "The chirp should raise the onset pitch.");
+        Assert.Equal(tailLegacy, tailChirped);
+    }
+
+    [Fact]
+    public void AnalogSaturation_IsANoOpAtZeroAndBoundsTheSignal()
+    {
+        var dry = new float[2048];
+        for (var i = 0; i < dry.Length; i++)
+        {
+            dry[i] = MathF.Sin(i * 0.05f) * 0.8f;
+        }
+
+        var untouched = (float[])dry.Clone();
+        VoicePostProcessor.ApplyAnalogSaturation(untouched, 0f);
+        Assert.Equal(dry, untouched);
+
+        var driven = (float[])dry.Clone();
+        VoicePostProcessor.ApplyAnalogSaturation(driven, 2f);
+
+        Assert.False(dry.AsSpan().SequenceEqual(driven));
+        foreach (var sample in driven)
+        {
+            Assert.True(float.IsFinite(sample));
+            Assert.InRange(sample, -1f, 1f);
+        }
+    }
+
+    [Fact]
+    public void EarlyReflections_ProduceTapsAtSevenAndThirteenMilliseconds()
+    {
+        var buffer = new float[4096];
+        buffer[100] = 1f;
+
+        var line = new float[VoicePostProcessor.ReflectionLineLength(SampleRate)];
+        var index = 0;
+        var first = VoicePostProcessor.FirstTapSamples(SampleRate);
+        var second = VoicePostProcessor.SecondTapSamples(SampleRate);
+
+        VoicePostProcessor.ApplyEarlyReflections(buffer, line, ref index, 1f, first, second);
+
+        Assert.Equal(0.38f, buffer[100 + first], 3);
+        Assert.Equal(0.24f, buffer[100 + second], 3);
+        Assert.Equal(1f, buffer[100]);
+    }
+
+    [Fact]
+    public void EarlyReflections_AreANoOpAtZeroRoomMix()
+    {
+        var buffer = new float[1024];
+        buffer[10] = 0.5f;
+
+        var line = new float[VoicePostProcessor.ReflectionLineLength(SampleRate)];
+        var index = 0;
+        VoicePostProcessor.ApplyEarlyReflections(
+            buffer,
+            line,
+            ref index,
+            0f,
+            VoicePostProcessor.FirstTapSamples(SampleRate),
+            VoicePostProcessor.SecondTapSamples(SampleRate));
+
+        Assert.Equal(0.5f, buffer[10]);
+        Assert.Equal(1, buffer.Count(sample => sample != 0f));
+    }
+
+    [Fact]
+    public void EarlyReflections_AreChunkSizeInvariant()
+    {
+        var whole = new float[6000];
+        for (var i = 0; i < whole.Length; i++)
+        {
+            whole[i] = MathF.Sin(i * 0.02f) * 0.4f;
+        }
+
+        var chunked = (float[])whole.Clone();
+        var first = VoicePostProcessor.FirstTapSamples(SampleRate);
+        var second = VoicePostProcessor.SecondTapSamples(SampleRate);
+
+        var wholeLine = new float[VoicePostProcessor.ReflectionLineLength(SampleRate)];
+        var wholeIndex = 0;
+        VoicePostProcessor.ApplyEarlyReflections(whole, wholeLine, ref wholeIndex, 0.8f, first, second);
+
+        var chunkLine = new float[VoicePostProcessor.ReflectionLineLength(SampleRate)];
+        var chunkIndex = 0;
+        for (var offset = 0; offset < chunked.Length; offset += 211)
+        {
+            var length = Math.Min(211, chunked.Length - offset);
+            VoicePostProcessor.ApplyEarlyReflections(
+                chunked.AsSpan(offset, length),
+                chunkLine,
+                ref chunkIndex,
+                0.8f,
+                first,
+                second);
+        }
+
+        Assert.Equal(whole, chunked);
+    }
+
+    private static int ZeroCrossings(float[] samples, int from, int to)
+    {
+        var count = 0;
+        for (var i = Math.Max(1, from); i < Math.Min(to, samples.Length); i++)
+        {
+            if ((samples[i - 1] <= 0f && samples[i] > 0f) ||
+                (samples[i - 1] >= 0f && samples[i] < 0f))
+            {
+                count++;
+            }
+        }
+
+        return count;
+    }
+
+    private static float ResponseRms(float center, float tone, int sampleRate)    {
         var filter = default(BiquadBandPass);
         filter.SetBandPass(center, 6f, sampleRate);
 
