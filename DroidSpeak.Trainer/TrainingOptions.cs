@@ -25,6 +25,10 @@ internal enum LearningRateSchedule
 /// </summary>
 /// <param name="HiddenWidths">Hidden layer sizes, between the 60 features and the 17 outputs.</param>
 /// <param name="HiddenActivation">Non-linearity used by every hidden layer.</param>
+/// <param name="OutputActivation">
+/// Non-linearity of the 17-output head. Sigmoid is the default because every target is a normalized
+/// amount inside <c>[0, 1]</c>; a linear head is the only other shape worth trying.
+/// </param>
 /// <param name="Epochs">Full passes over the training split.</param>
 /// <param name="BatchSize">Samples summed before one Adam update.</param>
 /// <param name="LearningRate">Base step size.</param>
@@ -41,6 +45,7 @@ internal enum LearningRateSchedule
 internal readonly record struct TrainingOptions(
     int[] HiddenWidths,
     ActivationType HiddenActivation,
+    ActivationType OutputActivation,
     int Epochs,
     int BatchSize,
     float LearningRate,
@@ -55,10 +60,11 @@ internal readonly record struct TrainingOptions(
     float ValidationFraction,
     int LogEvery)
 {
-    /// <summary>The documented v0.7 defaults: 64, 48, tanh, 60 epochs, batch 32, cosine decay.</summary>
+    /// <summary>The documented v0.7 defaults: 64, 48, tanh, sigmoid head, 60 epochs, batch 32, cosine decay.</summary>
     public static TrainingOptions Default => new(
         HiddenWidths: [64, 48],
         HiddenActivation: ActivationType.Tanh,
+        OutputActivation: ActivationType.Sigmoid,
         Epochs: 60,
         BatchSize: 32,
         LearningRate: 0.008f,
@@ -88,8 +94,9 @@ internal readonly record struct TrainingOptions(
         }
 
         // The output layer must land inside [0, 1] because the decoder treats every value as a
-        // normalized amount; a linear or ReLU output would train targets the decoder then clamps.
-        specs[^1] = new LayerSpec(from, outputSize, ActivationType.Sigmoid);
+        // normalized amount; the default sigmoid head guarantees that, while a linear head is
+        // allowed for experiments that want the trainer to learn the range itself.
+        specs[^1] = new LayerSpec(from, outputSize, OutputActivation);
         return specs;
     }
 
@@ -136,17 +143,18 @@ internal readonly record struct TrainingOptions(
 
         if (BatchSize < 1)
         {
-            return "--batch must be at least 1.";
+            return "--batch-size must be at least 1.";
         }
 
         if (LearningRate <= 0f || MinLearningRate < 0f || MinLearningRate > LearningRate)
         {
-            return "--lr must be positive and --lr-min must sit between 0 and --lr.";
+            return "--learning-rate must be positive and --lr-min must sit between 0 and " +
+                "--learning-rate.";
         }
 
         if (StepEpochs < 1 || StepFactor is <= 0f or > 1f)
         {
-            return "--step-epochs must be positive and --step-factor must sit in (0, 1].";
+            return "--step-size must be positive and --decay must sit in (0, 1].";
         }
 
         if (Beta1 is <= 0f or >= 1f || Beta2 is <= 0f or >= 1f)

@@ -272,6 +272,102 @@ internal sealed class TrainableMlp
     }
 
     /// <summary>
+    /// Copies every trainable value into <paramref name="destination"/> in one flat vector, weights
+    /// and biases layer by layer. This is the same order <see cref="ParameterCount"/> counts in, and
+    /// the order <see cref="LoadParameters"/> reads back.
+    /// </summary>
+    /// <param name="destination">Buffer of at least <see cref="ParameterCount"/> floats.</param>
+    /// <returns>The number of values written.</returns>
+    /// <exception cref="ArgumentException"><paramref name="destination"/> is too short.</exception>
+    public int CopyParameters(Span<float> destination)
+    {
+        if (destination.Length < ParameterCount)
+        {
+            throw new ArgumentException(
+                $"The parameter buffer must hold {ParameterCount} values, but has " +
+                $"{destination.Length}.",
+                nameof(destination));
+        }
+
+        var offset = 0;
+
+        for (var layer = 0; layer < _layerCount; layer++)
+        {
+            _weights[layer].CopyTo(destination[offset..]);
+            offset += _weights[layer].Length;
+            _biases[layer].CopyTo(destination[offset..]);
+            offset += _biases[layer].Length;
+        }
+
+        return offset;
+    }
+
+    /// <summary>
+    /// Overwrites the trainable values from a flat vector produced by
+    /// <see cref="CopyParameters"/>, and clears the Adam moments because they describe the previous
+    /// weights. Used to resume a run, roll a network back, and probe gradients numerically.
+    /// </summary>
+    /// <param name="source">Exactly <see cref="ParameterCount"/> floats.</param>
+    /// <exception cref="ArgumentException">The vector does not match the network's parameter count.</exception>
+    public void LoadParameters(ReadOnlySpan<float> source)
+    {
+        if (source.Length != ParameterCount)
+        {
+            throw new ArgumentException(
+                $"The network has {ParameterCount} parameters, but the vector holds " +
+                $"{source.Length}.",
+                nameof(source));
+        }
+
+        var offset = 0;
+
+        for (var layer = 0; layer < _layerCount; layer++)
+        {
+            source.Slice(offset, _weights[layer].Length).CopyTo(_weights[layer]);
+            offset += _weights[layer].Length;
+            source.Slice(offset, _biases[layer].Length).CopyTo(_biases[layer]);
+            offset += _biases[layer].Length;
+
+            Array.Clear(_weightMoments[layer]);
+            Array.Clear(_weightVelocities[layer]);
+            Array.Clear(_biasMoments[layer]);
+            Array.Clear(_biasVelocities[layer]);
+        }
+
+        _step = 0;
+    }
+
+    /// <summary>
+    /// Copies the gradient accumulated by the last <see cref="TrainSample"/> call into
+    /// <paramref name="destination"/>, in the same layer order as <see cref="CopyParameters"/>.
+    /// </summary>
+    /// <param name="destination">Buffer of at least <see cref="ParameterCount"/> floats.</param>
+    /// <returns>The number of values written.</returns>
+    /// <exception cref="ArgumentException"><paramref name="destination"/> is too short.</exception>
+    public int CopyGradients(Span<float> destination)
+    {
+        if (destination.Length < ParameterCount)
+        {
+            throw new ArgumentException(
+                $"The gradient buffer must hold {ParameterCount} values, but has " +
+                $"{destination.Length}.",
+                nameof(destination));
+        }
+
+        var offset = 0;
+
+        for (var layer = 0; layer < _layerCount; layer++)
+        {
+            _weightGradients[layer].CopyTo(destination[offset..]);
+            offset += _weightGradients[layer].Length;
+            _biasGradients[layer].CopyTo(destination[offset..]);
+            offset += _biasGradients[layer].Length;
+        }
+
+        return offset;
+    }
+
+    /// <summary>
     /// Overwrites the tensors with a previously exported checkpoint and clears the Adam moments, used
     /// to resume a run or roll back to the best validation loss.
     /// </summary>
