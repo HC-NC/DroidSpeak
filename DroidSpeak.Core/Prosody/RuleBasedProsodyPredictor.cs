@@ -581,7 +581,7 @@ public sealed class RuleBasedProsodyPredictor : IProsodyPredictor
     /// Builds a short high whistle or sob for stressed / emotional syllables. The probability and
     /// intensity grow with positive valence, arousal, shouting and exclamation marks.
     /// </summary>
-    private static WhistleSpec BuildWhistle(
+    internal static WhistleSpec BuildWhistle(
         in SyllableContext context,
         int noteLength,
         bool isExclamation,
@@ -663,7 +663,7 @@ public sealed class RuleBasedProsodyPredictor : IProsodyPredictor
         };
     }
 
-    private static ChatterSpec BuildChatter(
+    internal static ChatterSpec BuildChatter(
         in SyllableContext context,
         int gapLength,
         int sampleRate,
@@ -730,10 +730,10 @@ public sealed class RuleBasedProsodyPredictor : IProsodyPredictor
         };
     }
 
-    private static int Samples(float seconds, int sampleRate) =>
+    internal static int Samples(float seconds, int sampleRate) =>
         Math.Max(0, (int)MathF.Round(seconds * sampleRate));
 
-    private static uint MixSeed(uint globalSeed, uint wordHash, uint syllableIndex)
+    internal static uint MixSeed(uint globalSeed, uint wordHash, uint syllableIndex)
     {
         var value = globalSeed ^ (wordHash * 0x9E3779B1u) ^ ((syllableIndex + 1u) * 0x85EBCA77u);
         value ^= value >> 16;
