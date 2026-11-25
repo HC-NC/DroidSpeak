@@ -1,4 +1,4 @@
-﻿using System.Globalization;
+using System.Globalization;
 using System.Text;
 using DroidSpeak;
 using DroidSpeak.Demo;
@@ -6,6 +6,7 @@ using DroidSpeak.DSP;
 using DroidSpeak.Modem;
 using DroidSpeak.NLP;
 using DroidSpeak.Music;
+using DroidSpeak.Neural;
 
 try
 {
@@ -22,7 +23,7 @@ catch (IOException)
     // Redirected streams may not support changing the encoding.
 }
 
-var options = ParseOptions(args);
+var options = DemoCommandLine.ParseArguments(args);
 
 if (options.Error is not null)
 {
@@ -45,11 +46,36 @@ if (profileError is not null)
     return 1;
 }
 
-var synthesizer = new DroidSynthesizer(profile: initialProfile);
+// A --brain model is loaded before anything speaks, so a broken file fails fast with a one-line
+// diagnostic instead of a stack trace deep inside the first synthesis.
+NeuralProsodyPredictor? brainPredictor = null;
+if (options.Brain is not null)
+{
+    var (predictor, brainError) = DemoCommandLine.TryLoadBrain(options.Brain);
+    if (brainError is not null || predictor is null)
+    {
+        Console.Error.WriteLine($"error: {brainError ?? "the model could not be loaded"}");
+        return 1;
+    }
+
+    brainPredictor = predictor;
+}
+
+var session = new VoiceSession(
+    initialProfile,
+    ResolveVoiceName(options.Voice),
+    brainPredictor,
+    brainPredictor is null ? null : Path.GetFullPath(options.Brain!));
 
 if (options.Music is not null)
 {
-    var musicSamples = RunMusic(synthesizer.SampleRate, initialProfile, options.Music, options.Play, options.Solo, options.Stream);
+    var musicSamples = RunMusic(
+        VoiceSession.SampleRate,
+        session.CurrentProfile,
+        options.Music,
+        options.Play,
+        options.Solo,
+        options.Stream);
     if (musicSamples is null)
     {
         return 1;
@@ -57,7 +83,7 @@ if (options.Music is not null)
 
     if (options.OutputPath is not null)
     {
-        SaveSamplesToPath(musicSamples, synthesizer.SampleRate, options.OutputPath);
+        SaveSamplesToPath(musicSamples, VoiceSession.SampleRate, options.OutputPath);
     }
 
     return 0;
@@ -65,93 +91,13 @@ if (options.Music is not null)
 
 if (options.Text is null)
 {
-    RunRepl(synthesizer, options);
+    RunRepl(session, options);
     return 0;
 }
 
-RunUtterance(synthesizer, options.Text, options.OutputPath, options.Play, options.Stream);
+RunUtterance(session.Synth, options.Text, options.OutputPath, options.Play, options.Stream);
 return 0;
 
-
-static CliOptions ParseOptions(string[] arguments)
-{
-    string? outputPath = null;
-    string? music = null;
-    string? voice = null;
-    string? error = null;
-    var play = true;
-    var solo = false;
-    var stream = false;
-    var showHelp = false;
-    var textParts = new List<string>();
-
-    for (var i = 0; i < arguments.Length; i++)
-    {
-        var argument = arguments[i];
-        switch (argument)
-        {
-            case "-h":
-            case "--help":
-                showHelp = true;
-                break;
-
-            case "-o":
-            case "--output":
-                if (i + 1 >= arguments.Length)
-                    error = $"missing filename after '{argument}'";
-                else
-                    outputPath = arguments[++i];
-                break;
-
-            case "-m":
-            case "--music":
-                if (i + 1 >= arguments.Length)
-                    error = $"missing melody preset, file, or RTTTL string after '{argument}'";
-                else
-                    music = arguments[++i];
-                break;
-
-            case "-v":
-            case "--voice":
-                if (i + 1 >= arguments.Length)
-                    error = $"missing voice preset or JSON path after '{argument}'";
-                else
-                    voice = arguments[++i];
-                break;
-
-            case "--play":
-                play = true;
-                break;
-
-            case "--solo":
-                solo = true;
-                break;
-
-            case "--stream":
-                stream = true;
-                break;
-
-            case "--no-play":
-                play = false;
-                break;
-
-            default:
-                if (argument.StartsWith('-') && argument.Length > 1)
-                    error = $"unknown option '{argument}'";
-                else
-                    textParts.Add(argument);
-                break;
-        }
-    }
-
-    if (music is not null && textParts.Count > 0)
-    {
-        error = "cannot combine text input with --music in a single CLI call";
-    }
-
-    var text = textParts.Count == 0 ? null : string.Join(' ', textParts);
-    return new CliOptions(text, music, voice, outputPath, play, solo, stream, showHelp, error);
-}
 
 static float[] RunUtterance(
     DroidSynthesizer synthesizer,
@@ -241,19 +187,22 @@ static void Drain(Func<float[], int> pull)
     }
 }
 
-static void RunRepl(DroidSynthesizer synthesizer, CliOptions options)
+/// <summary>
+/// Runs the interactive loop. The session owns the mutable voice and prosody state, so every
+/// command re-reads <see cref="VoiceSession.Synth"/> instead of caching a synthesizer locally:
+/// /voice and /brain invalidate it, and the next utterance picks up the change.
+/// </summary>
+static void RunRepl(VoiceSession session, DemoOptions options)
 {
-    Console.WriteLine($"DroidSpeak — R2-D2 voice | {synthesizer.SampleRate} Hz");
+    Console.WriteLine($"DroidSpeak — R2-D2 voice | {VoiceSession.SampleRate} Hz");
     Console.WriteLine("Type text to speak, or /help for commands.");
     Console.WriteLine();
 
     float[]? lastSamples = null;
-    var currentProfile = synthesizer.Profile;
-    var voiceLabel = "r2";
 
     while (true)
     {
-        Console.Write($"{voiceLabel}> ");
+        Console.Write($"{session.VoiceLabel}> ");
         var line = Console.ReadLine();
 
         if (line is null)
@@ -287,20 +236,30 @@ static void RunRepl(DroidSynthesizer synthesizer, CliOptions options)
                     HandleVoice(argument);
                     continue;
 
+                case "/brain":
+                    HandleBrain(argument);
+                    continue;
+
                 case "/demo":
-                    lastSamples = RunDemo(synthesizer, currentProfile, options.Play, voiceLabel);
+                    lastSamples = RunDemo(session, options.Play);
                     continue;
 
                 case "/save":
-                    SaveLast(synthesizer, lastSamples, argument);
+                    SaveLast(session, lastSamples, argument);
                     continue;
 
                 case "/transmit":
-                    lastSamples = RunTransmit(synthesizer, currentProfile, argument, options.Play);
+                    lastSamples = RunTransmit(session, argument, options.Play);
                     continue;
 
                 case "/music":
-                    lastSamples = RunMusic(synthesizer.SampleRate, currentProfile, argument, options.Play, options.Solo, options.Stream);
+                    lastSamples = RunMusic(
+                        VoiceSession.SampleRate,
+                        session.CurrentProfile,
+                        argument,
+                        options.Play,
+                        options.Solo,
+                        options.Stream);
                     continue;
 
                 case "/stream":
@@ -310,7 +269,7 @@ static void RunRepl(DroidSynthesizer synthesizer, CliOptions options)
                         continue;
                     }
 
-                    lastSamples = RunUtterance(synthesizer, argument, null, options.Play, stream: true, currentProfile);
+                    lastSamples = RunUtterance(session.Synth, argument, null, options.Play, stream: true, session.CurrentProfile);
                     continue;
 
                 default:
@@ -319,7 +278,7 @@ static void RunRepl(DroidSynthesizer synthesizer, CliOptions options)
             }
         }
 
-        lastSamples = RunUtterance(synthesizer, line, null, options.Play, options.Stream, currentProfile);
+        lastSamples = RunUtterance(session.Synth, line, null, options.Play, options.Stream, session.CurrentProfile);
     }
 
     void HandleVoice(string argument)
@@ -327,10 +286,10 @@ static void RunRepl(DroidSynthesizer synthesizer, CliOptions options)
         if (string.IsNullOrWhiteSpace(argument))
         {
             Console.WriteLine(
-                $"Current voice: {voiceLabel} " +
-                $"({currentProfile.MinFreq.ToString("0", CultureInfo.InvariantCulture)}-" +
-                $"{currentProfile.MaxFreq.ToString("0", CultureInfo.InvariantCulture)} Hz, " +
-                $"x{currentProfile.SpeedMultiplier.ToString("0.00", CultureInfo.InvariantCulture)}).");
+                $"Current voice: {session.VoiceLabel} " +
+                $"({session.CurrentProfile.MinFreq.ToString("0", CultureInfo.InvariantCulture)}-" +
+                $"{session.CurrentProfile.MaxFreq.ToString("0", CultureInfo.InvariantCulture)} Hz, " +
+                $"x{session.CurrentProfile.SpeedMultiplier.ToString("0.00", CultureInfo.InvariantCulture)}).");
             Console.WriteLine("  Presets: r2, grumpy, bass, tiny");
             Console.WriteLine("  /voice json <file>  Load a profile from JSON.");
             Console.WriteLine("  /voice save <file>  Save the current profile as JSON.");
@@ -360,16 +319,16 @@ static void RunRepl(DroidSynthesizer synthesizer, CliOptions options)
                     Directory.CreateDirectory(directory);
                 }
 
-                File.WriteAllText(path, currentProfile.ToJson());
+                File.WriteAllText(path, session.CurrentProfile.ToJson());
                 Console.WriteLine($"Voice profile saved: {path}");
                 return;
             }
 
             try
             {
-                currentProfile = DroidVoiceProfile.FromJson(File.ReadAllText(path)).Normalized();
-                voiceLabel = Path.GetFileNameWithoutExtension(path);
-                Console.WriteLine($"Voice loaded from {path} as '{voiceLabel}'.");
+                session.CurrentProfile = DroidVoiceProfile.FromJson(File.ReadAllText(path));
+                session.VoiceName = Path.GetFileNameWithoutExtension(path);
+                Console.WriteLine($"Voice loaded from {path} as '{session.VoiceName}'.");
             }
             catch (Exception exception) when (exception is IOException
                 or UnauthorizedAccessException
@@ -397,21 +356,64 @@ static void RunRepl(DroidSynthesizer synthesizer, CliOptions options)
             return;
         }
 
-        currentProfile = preset;
-        voiceLabel = name;
+        session.CurrentProfile = preset;
+        session.VoiceName = name;
         Console.WriteLine(
             $"Voice set to {name} " +
             $"({preset.MinFreq.ToString("0", CultureInfo.InvariantCulture)}-" +
             $"{preset.MaxFreq.ToString("0", CultureInfo.InvariantCulture)} Hz, " +
             $"x{preset.SpeedMultiplier.ToString("0.00", CultureInfo.InvariantCulture)}).");
     }
+
+    void HandleBrain(string argument)
+    {
+        if (string.IsNullOrWhiteSpace(argument))
+        {
+            PrintBrainStatus();
+            Console.WriteLine();
+            Console.WriteLine("Usage:");
+            Console.WriteLine("  /brain <path.dsbrain>  Load a neural prosody model and use it.");
+            Console.WriteLine("  /brain off             Switch back to the rule-based engine.");
+            return;
+        }
+
+        if (argument.Equals("off", StringComparison.OrdinalIgnoreCase))
+        {
+            session.UseRuleBased();
+            Console.WriteLine("Prosody engine: rule-based.");
+            return;
+        }
+
+        var (predictor, error) = DemoCommandLine.TryLoadBrain(argument);
+        if (predictor is null || error is not null)
+        {
+            Console.WriteLine($"  {error ?? "the model could not be loaded"}");
+            Console.WriteLine("  Keeping the previous prosody engine.");
+            return;
+        }
+
+        session.UseNeural(predictor, Path.GetFullPath(argument));
+        PrintBrainStatus();
+    }
+
+    void PrintBrainStatus()
+    {
+        var neural = session.NeuralPredictor;
+        if (neural is null)
+        {
+            Console.WriteLine("Prosody engine: rule-based (no .dsbrain model loaded).");
+            return;
+        }
+
+        var model = neural.Model;
+        Console.WriteLine(
+            $"Prosody engine: neural — {session.BrainPath} " +
+            $"({model.InputSize} inputs -> {model.OutputSize} outputs, " +
+            $"{model.LayerCount} layers, {model.ParameterCount} parameters).");
+    }
 }
 
-static float[]? RunDemo(
-    DroidSynthesizer synthesizer,
-    DroidVoiceProfile profile,
-    bool play,
-    string voiceLabel)
+static float[]? RunDemo(VoiceSession session, bool play)
 {
     var demos = new (string Label, string Text)[]
     {
@@ -425,13 +427,13 @@ static float[]? RunDemo(
 
     foreach (var (label, text) in demos)
     {
-        Console.WriteLine($"[{label}] {text} ({voiceLabel})");
-        lastSamples = synthesizer.Synthesize(text, profile);
-        PrintAnalysis(text, lastSamples, synthesizer.SampleRate);
+        Console.WriteLine($"[{label}] {text} ({session.VoiceLabel})");
+        lastSamples = session.Synth.Synthesize(text, session.CurrentProfile);
+        PrintAnalysis(text, lastSamples, session.Synth.SampleRate);
 
         if (play)
         {
-            Play(lastSamples, synthesizer.SampleRate);
+            Play(lastSamples, session.Synth.SampleRate);
         }
 
         Console.WriteLine();
@@ -440,11 +442,7 @@ static float[]? RunDemo(
     return lastSamples;
 }
 
-static float[]? RunTransmit(
-    DroidSynthesizer synthesizer,
-    DroidVoiceProfile profile,
-    string text,
-    bool play)
+static float[]? RunTransmit(VoiceSession session, string text, bool play)
 {
     if (string.IsNullOrWhiteSpace(text))
     {
@@ -452,7 +450,8 @@ static float[]? RunTransmit(
         return null;
     }
 
-    var speech = synthesizer.Synthesize(text, profile);
+    var synthesizer = session.Synth;
+    var speech = synthesizer.Synthesize(text, session.CurrentProfile);
     float[] mixed;
     try
     {
@@ -488,7 +487,7 @@ static float[]? RunTransmit(
     return mixed;
 }
 
-static void SaveLast(DroidSynthesizer synthesizer, float[]? samples, string argument)
+static void SaveLast(VoiceSession session, float[]? samples, string argument)
 {
     if (samples is null)
     {
@@ -509,7 +508,7 @@ static void SaveLast(DroidSynthesizer synthesizer, float[]? samples, string argu
         Directory.CreateDirectory(directory);
     }
 
-    WavWriter.Write(fullPath, samples, synthesizer.SampleRate);
+    WavWriter.Write(fullPath, samples, session.Synth.SampleRate);
     Console.WriteLine($"Saved: {fullPath} ({new FileInfo(fullPath).Length} bytes)");
 }
 
@@ -537,6 +536,24 @@ static DroidVoiceProfile ResolveInitialProfile(string? voiceArg, out string? err
         err = msg;
         return DroidVoiceProfile.R2;
     }
+}
+
+/// <summary>
+/// The prompt label for the startup voice: the preset name, or the JSON profile's file stem. Purely
+/// presentation — the profile itself is validated by <see cref="ResolveInitialProfile"/>.
+/// </summary>
+static string ResolveVoiceName(string? voiceArg)
+{
+    if (string.IsNullOrWhiteSpace(voiceArg))
+    {
+        return "r2";
+    }
+
+    var key = voiceArg.Trim();
+    var preset = key.ToLowerInvariant();
+    return preset is "r2" or "grumpy" or "bass" or "tiny"
+        ? preset
+        : Path.GetFileNameWithoutExtension(key);
 }
 
 static void SaveSamplesToPath(float[] samples, int sampleRate, string outputPath)
@@ -690,13 +707,14 @@ static void PrintUsage()
     Console.WriteLine("DroidSpeak — procedural astromech-style text-to-beep & music demo.");
     Console.WriteLine();
     Console.WriteLine("Usage:");
-    Console.WriteLine("  dotnet run --project DroidSpeak.Demo -- \"<text>\" [-v voice] [-o file.wav] [--stream] [--no-play]");
+    Console.WriteLine("  dotnet run --project DroidSpeak.Demo -- \"<text>\" [-v voice] [--brain file.dsbrain] [-o file.wav] [--stream] [--no-play]");
     Console.WriteLine("  dotnet run --project DroidSpeak.Demo -- -m <file.mid|rtttl> [-v voice] [--solo] [--stream] [-o file.wav]");
     Console.WriteLine("  dotnet run --project DroidSpeak.Demo");
     Console.WriteLine();
     Console.WriteLine("Options:");
     Console.WriteLine("  -m, --music <arg>    Play or export a melody (.mid file or RTTTL string).");
     Console.WriteLine("  -v, --voice <voice>  Voice preset (r2, grumpy, bass, tiny) or path to a JSON profile.");
+    Console.WriteLine("  --brain <file>       Load a .dsbrain neural prosody model (60->17) for this run.");
     Console.WriteLine("  -o, --output <file>  Save the synthesized audio as a 16-bit PCM WAV.");
     Console.WriteLine("  --solo               Play only the upper lead melody when rendering music.");
     Console.WriteLine("  --stream             Pull audio in 1024-sample chunks and start playback immediately.");
@@ -719,6 +737,7 @@ static void PrintReplCommands()
     Console.WriteLine("  /voice [r2|grumpy|bass|tiny]         Show or change the droid voice.");
     Console.WriteLine("  /voice json <file>                   Load a voice profile from JSON.");
     Console.WriteLine("  /voice save <file>                   Save the current voice profile as JSON.");
+    Console.WriteLine("  /brain [file.dsbrain|off]            Show, load, or disable a neural prosody model.");
     Console.WriteLine("  /music [--solo] <file.mid|rtttl>     Play a melody using the current droid voice.");
     Console.WriteLine("  /stream <text>                       Speak text by pulling real-time 1024-sample chunks.");
     Console.WriteLine("  /transmit <text>                     Hide text in speech, save transmit.wav and decode it.");
@@ -727,15 +746,3 @@ static void PrintReplCommands()
     Console.WriteLine("  /help                                Show REPL commands.");
     Console.WriteLine("  /exit                                Quit (empty input also quits).");
 }
-
-
-internal sealed record CliOptions(
-    string? Text,
-    string? Music,
-    string? Voice,
-    string? OutputPath,
-    bool Play,
-    bool Solo,
-    bool Stream,
-    bool ShowHelp,
-    string? Error);

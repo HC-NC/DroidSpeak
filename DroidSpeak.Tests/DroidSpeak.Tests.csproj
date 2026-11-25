@@ -27,6 +27,7 @@
 	<ItemGroup>
 		<ProjectReference Include="..\DroidSpeak.Core\DroidSpeak.Core.csproj" />
 		<ProjectReference Include="..\DroidSpeak.Trainer\DroidSpeak.Trainer.csproj" />
+		<ProjectReference Include="..\DroidSpeak.Demo\DroidSpeak.Demo.csproj" />
 	</ItemGroup>
 
 </Project>
