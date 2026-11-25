@@ -16,7 +16,7 @@ namespace DroidSpeak.Neural;
 /// speech on a microcontroller-class target anyway.
 /// </para>
 /// </summary>
-public sealed class MlpModel
+public sealed partial class MlpModel
 {
     /// <summary>
     /// Largest input, output or hidden width the zero-allocation forward pass supports. The value is
