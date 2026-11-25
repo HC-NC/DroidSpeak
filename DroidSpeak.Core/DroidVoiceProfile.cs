@@ -152,22 +152,51 @@ public sealed record DroidVoiceProfile
     {
         var min = Math.Clamp(MinFreq, 40f, 7000f);
         var max = Math.Clamp(MaxFreq, min + 1f, 9000f);
+        var speed = Math.Clamp(SpeedMultiplier, 0.25f, 4f);
+        var fm = Math.Clamp(FmIntensity, 0f, 4f);
+        var chatter = Math.Clamp(ChatterProbability, 0f, 1f);
+        var triangle = Math.Clamp(TriangleMix, 0f, 1f);
+        var attack = ClampFinite(AttackSeconds, 0.002f, 0.100f, 0.010f);
+        var decay = ClampFinite(DecaySeconds, 0.005f, 0.150f, 0.022f);
+        var sustain = ClampFinite(SustainLevel, 0.10f, 1.00f, 0.74f);
+        var release = ClampFinite(ReleaseSeconds, 0.005f, 0.200f, 0.016f);
+        var cutoff = ClampFinite(FilterCutoffMultiplier, 0.80f, 4.00f, 1.65f);
+        var resonance = ClampFinite(FilterResonance, 0.50f, 4.00f, 1.45f);
+        var whistle = ClampFinite(WhistleProbability, 0.00f, 1.50f, 1.00f);
+
+        // Hot paths call this on every render; avoid a record copy when nothing needs clamping.
+        if (min == MinFreq &&
+            max == MaxFreq &&
+            speed == SpeedMultiplier &&
+            fm == FmIntensity &&
+            chatter == ChatterProbability &&
+            triangle == TriangleMix &&
+            attack == AttackSeconds &&
+            decay == DecaySeconds &&
+            sustain == SustainLevel &&
+            release == ReleaseSeconds &&
+            cutoff == FilterCutoffMultiplier &&
+            resonance == FilterResonance &&
+            whistle == WhistleProbability)
+        {
+            return this;
+        }
 
         return this with
         {
             MinFreq = min,
             MaxFreq = max,
-            SpeedMultiplier = Math.Clamp(SpeedMultiplier, 0.25f, 4f),
-            FmIntensity = Math.Clamp(FmIntensity, 0f, 4f),
-            ChatterProbability = Math.Clamp(ChatterProbability, 0f, 1f),
-            TriangleMix = Math.Clamp(TriangleMix, 0f, 1f),
-            AttackSeconds = ClampFinite(AttackSeconds, 0.002f, 0.100f, 0.010f),
-            DecaySeconds = ClampFinite(DecaySeconds, 0.005f, 0.150f, 0.022f),
-            SustainLevel = ClampFinite(SustainLevel, 0.10f, 1.00f, 0.74f),
-            ReleaseSeconds = ClampFinite(ReleaseSeconds, 0.005f, 0.200f, 0.016f),
-            FilterCutoffMultiplier = ClampFinite(FilterCutoffMultiplier, 0.80f, 4.00f, 1.65f),
-            FilterResonance = ClampFinite(FilterResonance, 0.50f, 4.00f, 1.45f),
-            WhistleProbability = ClampFinite(WhistleProbability, 0.00f, 1.50f, 1.00f),
+            SpeedMultiplier = speed,
+            FmIntensity = fm,
+            ChatterProbability = chatter,
+            TriangleMix = triangle,
+            AttackSeconds = attack,
+            DecaySeconds = decay,
+            SustainLevel = sustain,
+            ReleaseSeconds = release,
+            FilterCutoffMultiplier = cutoff,
+            FilterResonance = resonance,
+            WhistleProbability = whistle,
         };
     }
 

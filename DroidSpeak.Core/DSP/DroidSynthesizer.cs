@@ -1,3 +1,4 @@
+using System.Buffers;
 using DroidSpeak.NLP;
 using DroidSpeak.Prosody;
 
@@ -107,7 +108,7 @@ public sealed class DroidSynthesizer
 
         var plan = BuildPlan(phrases, profile ?? _profile);
         var buffer = new float[plan.TotalSamples];
-        Render(plan, buffer, profile ?? _profile);
+        Render(plan.Frames, buffer, profile ?? _profile);
         return buffer;
     }
 
@@ -125,7 +126,28 @@ public sealed class DroidSynthesizer
     public int GetSampleCount(IReadOnlyList<Phrase> phrases, DroidVoiceProfile? profile = null)
     {
         ArgumentNullException.ThrowIfNull(phrases);
-        return BuildPlan(phrases, profile ?? _profile).TotalSamples;
+
+        var count = SyllableContextBuilder.Count(phrases);
+        if (count == 0)
+        {
+            return 0;
+        }
+
+        var contexts = ArrayPool<SyllableContext>.Shared.Rent(count);
+        var frames = ArrayPool<SyllableFrame>.Shared.Rent(count);
+        try
+        {
+            return PredictFrames(
+                phrases,
+                profile ?? _profile,
+                contexts.AsSpan(0, count),
+                frames.AsSpan(0, count));
+        }
+        finally
+        {
+            ArrayPool<SyllableContext>.Shared.Return(contexts);
+            ArrayPool<SyllableFrame>.Shared.Return(frames);
+        }
     }
 
     /// <summary>
@@ -146,17 +168,39 @@ public sealed class DroidSynthesizer
     {
         ArgumentNullException.ThrowIfNull(phrases);
 
-        var plan = BuildPlan(phrases, _profile);
-        var count = Math.Min(destination.Length, plan.TotalSamples);
+        var count = SyllableContextBuilder.Count(phrases);
         if (count == 0)
         {
             return 0;
         }
 
-        var target = destination[..count];
-        target.Clear();
-        Render(plan, target, _profile);
-        return count;
+        var contexts = ArrayPool<SyllableContext>.Shared.Rent(count);
+        var frames = ArrayPool<SyllableFrame>.Shared.Rent(count);
+        try
+        {
+            var frameSpan = frames.AsSpan(0, count);
+            var totalSamples = PredictFrames(
+                phrases,
+                _profile,
+                contexts.AsSpan(0, count),
+                frameSpan);
+
+            var countToWrite = Math.Min(destination.Length, totalSamples);
+            if (countToWrite == 0)
+            {
+                return 0;
+            }
+
+            var target = destination[..countToWrite];
+            target.Clear();
+            Render(frameSpan, target, _profile);
+            return countToWrite;
+        }
+        finally
+        {
+            ArrayPool<SyllableContext>.Shared.Return(contexts);
+            ArrayPool<SyllableFrame>.Shared.Return(frames);
+        }
     }
 
     internal SynthesisPlan BuildPlan(IReadOnlyList<Phrase> phrases) =>
@@ -177,18 +221,44 @@ public sealed class DroidSynthesizer
         var contexts = new SyllableContext[syllableCount];
         var frames = new SyllableFrame[syllableCount];
 
-        SyllableContextBuilder.Build(phrases, _sampleRate, _seed, contexts);
-        _prosody.Predict(contexts, frames, profile);
+        plan.TotalSamples = PredictFrames(phrases, profile, contexts, frames);
         plan.Frames = frames;
         Flatten(frames, plan);
 
+        return plan;
+    }
+
+    /// <summary>
+    /// Builds contexts, runs the predictor and returns the exact utterance length in samples.
+    /// Both spans must be at least as long as the phrase syllable count.
+    /// </summary>
+    private int PredictFrames(
+        IReadOnlyList<Phrase> phrases,
+        DroidVoiceProfile profile,
+        Span<SyllableContext> contexts,
+        Span<SyllableFrame> frames)
+    {
+        SyllableContextBuilder.Build(phrases, _sampleRate, _seed, contexts);
+        _prosody.Predict(contexts, frames, profile);
+        return TotalSamples(frames);
+    }
+
+    /// <summary>
+    /// Derives the exact output length from the predicted frames: the last syllable's end, the
+    /// trailing phrase pause, and the fixed utterance tail.
+    /// </summary>
+    private int TotalSamples(ReadOnlySpan<SyllableFrame> frames)
+    {
+        if (frames.IsEmpty)
+        {
+            return 0;
+        }
+
         var last = frames[^1];
-        plan.TotalSamples = last.StartSample
+        return last.StartSample
             + last.LengthSamples
             + last.PauseAfterSamples
             + Samples(0.15f);
-
-        return plan;
     }
 
     /// <summary>
@@ -268,7 +338,7 @@ public sealed class DroidSynthesizer
         }
     }
 
-    private void Render(SynthesisPlan plan, Span<float> buffer, DroidVoiceProfile profile)
+    private void Render(ReadOnlySpan<SyllableFrame> frames, Span<float> buffer, DroidVoiceProfile profile)
     {
         // One oscillator for the whole utterance: phase is never reset between syllables.
         var carrierPhase = 0d;
@@ -278,7 +348,7 @@ public sealed class DroidSynthesizer
         // Three ordered passes preserve the v0.3.0 mix order: every note first, then every
         // whistle, then every chatter. Overlapping layers therefore sum in the same order and
         // produce bit-identical floating-point results.
-        foreach (var frame in plan.Frames)
+        foreach (var frame in frames)
         {
             var available = buffer.Length - frame.StartSample;
             if (available <= 0)
@@ -296,7 +366,7 @@ public sealed class DroidSynthesizer
                 profile);
         }
 
-        foreach (var frame in plan.Frames)
+        foreach (var frame in frames)
         {
             if (!frame.Whistle.Present)
             {
@@ -314,7 +384,7 @@ public sealed class DroidSynthesizer
             RenderWhistle(frame, buffer.Slice(startSample, count));
         }
 
-        foreach (var frame in plan.Frames)
+        foreach (var frame in frames)
         {
             if (!frame.Chatter.Present)
             {

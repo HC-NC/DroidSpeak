@@ -5,6 +5,10 @@ namespace DroidSpeak.Prosody;
 /// <summary>
 /// Flattens parsed phrases into the value-type <see cref="SyllableContext"/> stream consumed by
 /// <see cref="IProsodyPredictor"/>.
+/// <para>
+/// Everything here uses indexed loops over <see cref="IReadOnlyList{T}"/>. A <c>foreach</c> over an
+/// interface-typed list boxes its enumerator, which would break the allocation-free hot path.
+/// </para>
 /// </summary>
 internal static class SyllableContextBuilder
 {
@@ -12,11 +16,12 @@ internal static class SyllableContextBuilder
     public static int Count(IReadOnlyList<Phrase> phrases)
     {
         var count = 0;
-        foreach (var phrase in phrases)
+        for (var phraseIndex = 0; phraseIndex < phrases.Count; phraseIndex++)
         {
-            foreach (var word in phrase.Words)
+            var words = phrases[phraseIndex].Words;
+            for (var wordIndex = 0; wordIndex < words.Count; wordIndex++)
             {
-                count += word.Syllables.Count;
+                count += words[wordIndex].Syllables.Count;
             }
         }
 
@@ -37,23 +42,31 @@ internal static class SyllableContextBuilder
         var phraseIndex = 0;
         var firstSpokenPhrase = true;
 
-        foreach (var phrase in phrases)
+        for (var phrasePosition = 0; phrasePosition < phrases.Count; phrasePosition++)
         {
-            if (phrase.Words.Count == 0 || phrase.SyllableCount == 0)
+            var phrase = phrases[phrasePosition];
+            var words = phrase.Words;
+            if (words.Count == 0)
             {
                 continue;
             }
 
-            var phraseSyllableCount = phrase.SyllableCount;
+            var phraseSyllableCount = CountSyllables(words);
+            if (phraseSyllableCount == 0)
+            {
+                continue;
+            }
+
             var previousWordHadComma = false;
 
-            for (var wordIndex = 0; wordIndex < phrase.Words.Count; wordIndex++)
+            for (var wordIndex = 0; wordIndex < words.Count; wordIndex++)
             {
-                var word = phrase.Words[wordIndex];
+                var word = words[wordIndex];
+                var syllables = word.Syllables;
 
-                for (var syllableIndex = 0; syllableIndex < word.Syllables.Count; syllableIndex++)
+                for (var syllableIndex = 0; syllableIndex < syllables.Count; syllableIndex++)
                 {
-                    var syllable = word.Syllables[syllableIndex];
+                    var syllable = syllables[syllableIndex];
 
                     contexts[index++] = new SyllableContext
                     {
@@ -63,7 +76,7 @@ internal static class SyllableContextBuilder
                         PhraseIndex = phraseIndex,
                         WordIndexInPhrase = wordIndex,
                         SyllableIndex = syllableIndex,
-                        WordSyllableCount = word.Syllables.Count,
+                        WordSyllableCount = syllables.Count,
                         PhraseSyllableCount = phraseSyllableCount,
                         WordTextLength = word.Text.Length,
                         TempoScale = phrase.TempoScale,
@@ -86,5 +99,16 @@ internal static class SyllableContextBuilder
             phraseIndex++;
             firstSpokenPhrase = false;
         }
+    }
+
+    private static int CountSyllables(IReadOnlyList<Word> words)
+    {
+        var count = 0;
+        for (var i = 0; i < words.Count; i++)
+        {
+            count += words[i].Syllables.Count;
+        }
+
+        return count;
     }
 }
