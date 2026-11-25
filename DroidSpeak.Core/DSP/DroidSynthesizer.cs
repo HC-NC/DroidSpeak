@@ -32,16 +32,21 @@ public sealed class DroidSynthesizer
     private readonly int _sampleRate;
     private readonly uint _seed;
     private readonly DroidVoiceProfile _profile;
-    private readonly RuleBasedProsodyPredictor _prosody = new();
+    private readonly IProsodyPredictor _prosody;
 
     /// <summary>Creates a synthesizer.</summary>
     /// <param name="sampleRate">Output sample rate in Hz (8000–192000).</param>
     /// <param name="seed">Global seed mixed into every syllable seed. Defaults to <c>0</c>.</param>
     /// <param name="profile">Voice profile. Defaults to <see cref="DroidVoiceProfile.R2"/>.</param>
+    /// <param name="predictor">
+    /// Prosody model. Defaults to <see cref="RuleBasedProsodyPredictor"/>, which reproduces the
+    /// classic procedural droid voice.
+    /// </param>
     public DroidSynthesizer(
         int sampleRate = DefaultSampleRate,
         int seed = 0,
-        DroidVoiceProfile? profile = null)
+        DroidVoiceProfile? profile = null,
+        IProsodyPredictor? predictor = null)
     {
         if (sampleRate is < 8000 or > 192000)
         {
@@ -54,6 +59,7 @@ public sealed class DroidSynthesizer
         _sampleRate = sampleRate;
         _seed = unchecked((uint)seed);
         _profile = (profile ?? DroidVoiceProfile.R2).Normalized();
+        _prosody = predictor ?? RuleBasedProsodyPredictor.Shared;
     }
 
     /// <summary>The output sample rate in Hz.</summary>
@@ -173,6 +179,7 @@ public sealed class DroidSynthesizer
 
         SyllableContextBuilder.Build(phrases, _sampleRate, _seed, contexts);
         _prosody.Predict(contexts, frames, profile);
+        plan.Frames = frames;
         Flatten(frames, plan);
 
         var last = frames[^1];
@@ -268,46 +275,61 @@ public sealed class DroidSynthesizer
         var modulatorPhase = 0d;
         var modulatorPhase2 = 0d;
 
-        foreach (var note in plan.Events)
+        // Three ordered passes preserve the v0.3.0 mix order: every note first, then every
+        // whistle, then every chatter. Overlapping layers therefore sum in the same order and
+        // produce bit-identical floating-point results.
+        foreach (var frame in plan.Frames)
         {
-            var available = buffer.Length - note.StartSample;
+            var available = buffer.Length - frame.StartSample;
             if (available <= 0)
             {
                 continue;
             }
 
-            var count = Math.Min(note.Length, available);
+            var count = Math.Min(frame.LengthSamples, available);
             RenderNote(
-                note,
-                buffer.Slice(note.StartSample, count),
+                frame,
+                buffer.Slice(frame.StartSample, count),
                 ref carrierPhase,
                 ref modulatorPhase,
                 ref modulatorPhase2,
                 profile);
         }
 
-        foreach (var whistle in plan.Whistles)
+        foreach (var frame in plan.Frames)
         {
-            var available = buffer.Length - whistle.StartSample;
+            if (!frame.Whistle.Present)
+            {
+                continue;
+            }
+
+            var startSample = frame.StartSample + frame.Whistle.StartOffsetSamples;
+            var available = buffer.Length - startSample;
             if (available <= 0)
             {
                 continue;
             }
 
-            var count = Math.Min(whistle.Length, available);
-            RenderWhistle(whistle, buffer.Slice(whistle.StartSample, count));
+            var count = Math.Min(frame.Whistle.LengthSamples, available);
+            RenderWhistle(frame, buffer.Slice(startSample, count));
         }
 
-        foreach (var chatter in plan.Chatters)
+        foreach (var frame in plan.Frames)
         {
-            var available = buffer.Length - chatter.StartSample;
+            if (!frame.Chatter.Present)
+            {
+                continue;
+            }
+
+            var startSample = frame.StartSample + frame.Chatter.StartOffsetSamples;
+            var available = buffer.Length - startSample;
             if (available <= 0)
             {
                 continue;
             }
 
-            var count = Math.Min(chatter.Length, available);
-            RenderChatter(chatter, buffer.Slice(chatter.StartSample, count));
+            var count = Math.Min(frame.Chatter.LengthSamples, available);
+            RenderChatter(frame, buffer.Slice(startSample, count));
         }
 
         ApplyDynamicLowPassFilter(buffer, profile);
@@ -315,49 +337,50 @@ public sealed class DroidSynthesizer
     }
 
     private void RenderNote(
-        in NoteEvent note,
+        in SyllableFrame frame,
         Span<float> target,
         ref double carrierPhase,
         ref double modulatorPhase,
         ref double modulatorPhase2,
         DroidVoiceProfile profile)
     {
-        var random = new XorShift32(note.Seed);
-        var wordDuration = Math.Max(1, note.WordEndSample - note.WordStartSample) / (float)_sampleRate;
-        var frequencyRatio = note.EndFrequency / note.StartFrequency;
-        var lastSample = Math.Max(1, note.Length - 1);
+        var random = new XorShift32(frame.Seed);
+        var wordDuration = Math.Max(1, frame.WordEndSample - frame.WordStartSample) / (float)_sampleRate;
+        var frequencyRatio = frame.EndFreq / frame.StartFreq;
+        var lastSample = Math.Max(1, frame.LengthSamples - 1);
 
         for (var n = 0; n < target.Length; n++)
         {
             var noteTime = n / (float)_sampleRate;
-            var absoluteTime = (note.StartSample + n) / (float)_sampleRate;
-            var timeInWord = (note.StartSample + n - note.WordStartSample) / (float)_sampleRate;
+            var absoluteTime = (frame.StartSample + n) / (float)_sampleRate;
+            var timeInWord = (frame.StartSample + n - frame.WordStartSample) / (float)_sampleRate;
             var position = n / (float)lastSample;
 
             // Smoothstep makes the glide ease in and out instead of sounding like a ramp.
             var curveT = position * position * (3f - 2f * position);
 
             // Pitch is perceived logarithmically, so glide exponentially between frequencies.
-            var frequency = note.StartFrequency * MathF.Pow(frequencyRatio, curveT);
+            var frequency = frame.StartFreq * MathF.Pow(frequencyRatio, curveT);
 
             // 1. Smooth bell-shaped whistle transient (starts and ends at 0, zero phase/freq click)
             if (timeInWord < 0.022f)
             {
                 var scoopPhase = timeInWord / 0.022f;
-                var direction = (note.Seed & 1u) == 0u ? -0.045f : 0.040f;
+                var direction = (frame.Seed & 1u) == 0u ? -0.045f : 0.040f;
                 frequency *= 1f + direction * MathF.Sin(MathF.PI * scoopPhase);
             }
 
 
-            if (note.TrillDepth > 0f)
+            if (frame.TrillDepth > 0f)
             {
                 // Smooth 15ms fade-in prevents an instantaneous frequency jump (click) at syllable onset
                 var trillFade = Math.Clamp(noteTime / 0.015f, 0f, 1f);
-                frequency += note.TrillDepth * trillFade * MathF.Sin(TwoPi * note.TrillRate * absoluteTime);
+                frequency += frame.TrillDepth * trillFade * MathF.Sin(TwoPi * frame.TrillRate * absoluteTime);
             }
 
-            var growlDepth = note.StartGrowlDepth + (note.GrowlDepth - note.StartGrowlDepth) * curveT;
-            var growlWave = MathF.Sin(TwoPi * note.GrowlFrequency * absoluteTime);
+            var growlDepth = frame.StartGrowlIntensity
+                + (frame.GrowlIntensity - frame.StartGrowlIntensity) * curveT;
+            var growlWave = MathF.Sin(TwoPi * frame.GrowlFrequency * absoluteTime);
             if (growlDepth > 0f)
             {
                 frequency += 45f * growlDepth * growlWave;
@@ -366,16 +389,16 @@ public sealed class DroidSynthesizer
             frequency = MathF.Max(20f, frequency);
 
             carrierPhase += TwoPi * frequency / _sampleRate;
-            modulatorPhase += TwoPi * frequency * note.ModulatorRatio / _sampleRate;
-            modulatorPhase2 += TwoPi * frequency * note.ModulatorRatio2 / _sampleRate;
+            modulatorPhase += TwoPi * frequency * frame.FmRatio / _sampleRate;
+            modulatorPhase2 += TwoPi * frequency * frame.FmRatio2 / _sampleRate;
 
             var modulator = MathF.Sin((float)modulatorPhase);
             var modulator2 = MathF.Sin((float)modulatorPhase2);
 
             // 2. Dynamic FM attack decay: bright consonant bite at onset, warming into a pure whistle
             var fmBurst = 0.42f + 0.58f * MathF.Exp(-noteTime * 28f);
-            var fmIndex = (note.StartFmIndex + (note.FmIndex - note.StartFmIndex) * curveT) * fmBurst;
-            var fmIndex2 = (note.StartFmIndex2 + (note.FmIndex2 - note.StartFmIndex2) * curveT) * fmBurst;
+            var fmIndex = (frame.StartFmDepth + (frame.FmDepth - frame.StartFmDepth) * curveT) * fmBurst;
+            var fmIndex2 = (frame.StartFmDepth2 + (frame.FmDepth2 - frame.StartFmDepth2) * curveT) * fmBurst;
 
             var carrier = MathF.Sin((float)carrierPhase + fmIndex * modulator + fmIndex2 * modulator2);
             var triangleMix = Math.Clamp(profile.TriangleMix, 0f, 0.60f) * fmBurst;
@@ -387,30 +410,31 @@ public sealed class DroidSynthesizer
             var envelope = AdsrEnvelope(
                 timeInWord,
                 wordDuration,
-                note.WordAttack,
-                note.WordDecay,
-                note.SustainLevel,
-                note.WordRelease);
+                frame.AttackTime,
+                frame.DecayTime,
+                frame.SustainLevel,
+                frame.ReleaseTime);
 
-            var amplitude = note.StartAmplitude + (note.Amplitude - note.StartAmplitude) * curveT;
+            var amplitude = frame.StartGain + (frame.Gain - frame.StartGain) * curveT;
             var growl = 1f + growlDepth * growlWave;
             var sample = wave * amplitude * envelope * growl;
 
-            if (note.NoiseAmount > 0f)
+            if (frame.NoiseMix > 0f)
             {
                 var noise = random.NextFloat() * 2f - 1f;
                 var noiseEnvelope = MathF.Exp(-noteTime * 110f);
-                sample += noise * note.NoiseAmount * envelope * noiseEnvelope;
+                sample += noise * frame.NoiseMix * envelope * noiseEnvelope;
             }
 
-            target[n] += SoftSaturate(sample, note.Drive, note.Saturation);
+            target[n] += SoftSaturate(sample, frame.Drive, frame.Saturation);
         }
     }
 
-    private void RenderWhistle(in WhistleEvent whistle, Span<float> target)
+    private void RenderWhistle(in SyllableFrame frame, Span<float> target)
     {
+        var whistle = frame.Whistle;
         var random = new XorShift32(whistle.Seed);
-        var duration = whistle.Length / (float)_sampleRate;
+        var duration = whistle.LengthSamples / (float)_sampleRate;
 
         var attack = MathF.Min(0.004f, duration * 0.22f);
         var decay = MathF.Min(0.006f, duration * 0.20f);
@@ -428,7 +452,7 @@ public sealed class DroidSynthesizer
 
         var phase = 0d;
         var frequencyRatio = whistle.EndFrequency / whistle.StartFrequency;
-        var lastSample = Math.Max(1, whistle.Length - 1);
+        var lastSample = Math.Max(1, whistle.LengthSamples - 1);
 
         for (var n = 0; n < target.Length; n++)
         {
@@ -450,11 +474,12 @@ public sealed class DroidSynthesizer
         }
     }
 
-    private void RenderChatter(in ChatterEvent chatter, Span<float> target)
+    private void RenderChatter(in SyllableFrame frame, Span<float> target)
     {
+        var chatter = frame.Chatter;
         var random = new XorShift32(chatter.Seed);
         var phase = 0d;
-        var lastSample = Math.Max(1, chatter.Length - 1);
+        var lastSample = Math.Max(1, chatter.LengthSamples - 1);
 
         if (chatter.Kind == ChatterKind.Arpeggio)
         {
@@ -660,6 +685,8 @@ public sealed class DroidSynthesizer
 
     internal sealed class SynthesisPlan
     {
+        public SyllableFrame[] Frames { get; set; } = Array.Empty<SyllableFrame>();
+
         public List<NoteEvent> Events { get; } = new();
 
         public List<WhistleEvent> Whistles { get; } = new();

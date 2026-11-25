@@ -18,6 +18,9 @@ public sealed class RuleBasedProsodyPredictor : IProsodyPredictor
     private const float WhistleMinFrequency = 1400f;
     private const float WhistleMaxFrequency = 2600f;
 
+    /// <summary>A shared stateless instance, used as the default predictor.</summary>
+    public static RuleBasedProsodyPredictor Shared { get; } = new();
+
     /// <inheritdoc />
     public void Predict(
         ReadOnlySpan<SyllableContext> contexts,
