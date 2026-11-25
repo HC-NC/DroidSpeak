@@ -19,6 +19,7 @@
 - **NativeAOT & Reflection-Free:** Uses source-generated `System.Text.Json` (`DroidVoiceProfileJsonContext`), making it ready for iOS, consoles, Unity/Godot, and AOT deployments.
 - **Deterministic Synthesis:** Syllable variations are seeded via a cross-platform FNV-1a hash of lowercase words—the same text and seed always produce bit-identical audio.
 - **Emotion & Typography NLP (`DroidSpeak.NLP`):** Extracts continuous `Valence–Arousal` vectors from punctuation (`!`, `?`, `...`), `ALL CAPS`, and a built-in bilingual (EN/RU) lexicon.
+- **Pluggable Prosody (`DroidSpeak.Prosody`):** The `IProsodyPredictor` contract turns flat `SyllableContext` values into per-syllable `SyllableFrame` descriptions, fully decoupled from DSP. `RuleBasedProsodyPredictor` reproduces the classic voice bit-for-bit; custom predictors can be injected without touching the renderer.
 - **Procedural FM & Legato DSP (`DroidSpeak.DSP`):** Continuous-phase sine/triangle oscillators, dual FM modulators, exponential portamento, word-level ADSR envelopes, consonant noise/growl shaping, and procedural chatter (30 Hz trills, micro-arpeggios, relay clicks).
 - **Polyphonic Music & Melody Engine (`DroidSpeak.Music`):** Built-in zero-dependency parsers for Standard MIDI Files (`.mid`, SMF Format 0 & 1) and RTTTL ringtones, rendered with an expressive lead droid voice (portamento glides, trills, upward chirps) and relay-click percussion, plus a `--solo` lead-only mode.
 - **Customizable Voice Profiles:** Built-in presets (`R2`, `Grumpy`, `Bass`, `Tiny`) plus JSON serialization to craft custom droid personalities.
@@ -65,6 +66,7 @@ DroidSpeak.sln
 ├── DroidSpeak.Core        # Core library (zero dependencies)
 │   ├── DroidVoiceProfile.cs
 │   ├── NLP/               # Text, syllable, and emotion analysis
+│   ├── Prosody/           # SyllableContext -> SyllableFrame prediction (IProsodyPredictor)
 │   ├── DSP/               # FM synthesizer, chatter generator, WAV writer
 │   ├── Music/             # MIDI & RTTTL parsers, polyphonic droid music synthesizer
 │   └── Modem/             # FSK acoustic encoder/decoder & radix-2 FFT
@@ -139,6 +141,64 @@ int requiredSamples = synthesizer.GetSampleCount(text);
 Span<float> buffer = new float[requiredSamples];
 int written = synthesizer.Synthesize(text, buffer);
 ```
+
+Parsing text allocates, but the prosody and DSP pipeline does not. Once you reuse already parsed
+phrases, both `GetSampleCount` and the `Span<float>` overload run allocation-free on the warm path:
+
+```csharp
+using DroidSpeak.NLP;
+
+IReadOnlyList<Phrase> phrases = TextParser.Parse("Beep boop! System is ready.");
+Span<float> buffer = new float[synthesizer.GetSampleCount(phrases)];
+int written = synthesizer.Synthesize(phrases, buffer); // 0 bytes allocated
+```
+
+### Custom Prosody (`DroidSpeak.Prosody`)
+
+Prosody and rendering are separate stages. An `IProsodyPredictor` reads flat `SyllableContext`
+values and writes one `SyllableFrame` per syllable; the DSP renderer consumes only frames.
+
+```csharp
+using DroidSpeak.Prosody;
+
+public sealed class WhisperPredictor : IProsodyPredictor
+{
+    public void Predict(
+        ReadOnlySpan<SyllableContext> contexts,
+        Span<SyllableFrame> frames,
+        DroidVoiceProfile profile)
+    {
+        for (var i = 0; i < contexts.Length; i++)
+        {
+            var start = i * 4000;
+            frames[i] = new SyllableFrame
+            {
+                StartSample = start,
+                LengthSamples = 4000,
+                StartFreq = 400f,
+                EndFreq = 380f,
+                StartGain = 0.15f,
+                Gain = 0.12f,
+                FmRatio = 2f,
+                FmRatio2 = 3.07f,
+                AttackTime = 0.02f,
+                DecayTime = 0.03f,
+                ReleaseTime = 0.02f,
+                SustainLevel = 0.6f,
+                WordStartSample = start,
+                WordEndSample = start + 4000,
+                StartsLegatoSegment = true,
+            };
+        }
+    }
+}
+
+var whisper = new DroidSynthesizer(predictor: new WhisperPredictor());
+```
+
+`RuleBasedProsodyPredictor` stays the default and produces byte-identical output to v0.3.0 for the
+same text, seed and profile. `SyllableFrame` also carries reserved `MidFreq`, `RingModMix` and
+`Formant*` fields for the upcoming expressive layer; the v0.4 renderer ignores them.
 
 ### Voice Profiles (Code & JSON)
 
