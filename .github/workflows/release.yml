@@ -66,18 +66,16 @@ jobs:
   publish-cli:
     if: startsWith(github.ref, 'refs/tags/v')
     needs: build-and-test
-    runs-on: ${{ matrix.os }}
+    runs-on: ${{ matrix.target.os }}
     strategy:
       fail-fast: false
       matrix:
         tool: [ DroidSpeak.Trainer, DroidSpeak.Demo ]
-        include:
-          - rid: win-x64
-            os: windows-latest
-          - rid: linux-x64
-            os: ubuntu-latest
-          - rid: osx-arm64
-            os: macos-latest
+        target:
+          - { rid: win-x64, os: windows-latest }
+          - { rid: linux-x64, os: ubuntu-latest }
+          - { rid: osx-arm64, os: macos-latest }
+
 
     steps:
       - name: Checkout repository
@@ -90,22 +88,22 @@ jobs:
         with:
           dotnet-version: '10.0.x'
 
-      - name: Publish ${{ matrix.tool }} (${{ matrix.rid }})
+      - name: Publish ${{ matrix.tool }} (${{ matrix.target.rid }})
         run: >
           dotnet publish ${{ matrix.tool }}/${{ matrix.tool }}.csproj
           -c Release
-          -r ${{ matrix.rid }}
+          -r ${{ matrix.target.rid }}
           --self-contained true
           -p:PublishSingleFile=true
           -p:IncludeNativeLibrariesForSelfExtract=true
           -p:EnableCompressionInSingleFile=true
-          -o ${{ runner.temp }}/publish-${{ matrix.tool }}-${{ matrix.rid }}
+          -o ${{ runner.temp }}/publish-${{ matrix.tool }}-${{ matrix.target.rid }}
 
       - name: Smoke-test published binary
         shell: bash
         run: |
           set -euo pipefail
-          bin="${{ runner.temp }}/publish-${{ matrix.tool }}-${{ matrix.rid }}/${{ matrix.tool }}"
+          bin="${{ runner.temp }}/publish-${{ matrix.tool }}-${{ matrix.target.rid }}/${{ matrix.tool }}"
           if [ -f "$bin.exe" ]; then bin="$bin.exe"; fi
           "$bin" --help > /dev/null
           if [ "${{ matrix.tool }}" = "DroidSpeak.Trainer" ]; then
@@ -116,28 +114,28 @@ jobs:
           fi
 
       - name: Zip binaries (Unix)
-        if: matrix.rid != 'win-x64'
+        if: matrix.target.rid != 'win-x64'
         shell: bash
         run: |
           set -euo pipefail
-          stage="${{ runner.temp }}/publish-${{ matrix.tool }}-${{ matrix.rid }}"
+          stage="${{ runner.temp }}/publish-${{ matrix.tool }}-${{ matrix.target.rid }}"
           # Unix zips must carry the executable bit for the single-file apphost.
           chmod +x "$stage/${{ matrix.tool }}"
-          ( cd "$stage" && zip -r -q "${{ runner.temp }}/${{ matrix.tool }}-${{ matrix.rid }}.zip" . )
+          ( cd "$stage" && zip -r -q "${{ runner.temp }}/${{ matrix.tool }}-${{ matrix.target.rid }}.zip" . )
 
       - name: Zip binaries (Windows)
-        if: matrix.rid == 'win-x64'
+        if: matrix.target.rid == 'win-x64'
         shell: pwsh
         run: |
           Compress-Archive `
-            -Path "${{ runner.temp }}/publish-${{ matrix.tool }}-${{ matrix.rid }}/*" `
-            -DestinationPath "${{ runner.temp }}/${{ matrix.tool }}-${{ matrix.rid }}.zip"
+            -Path "${{ runner.temp }}/publish-${{ matrix.tool }}-${{ matrix.target.rid }}/*" `
+            -DestinationPath "${{ runner.temp }}/${{ matrix.tool }}-${{ matrix.target.rid }}.zip"
 
       - name: Upload CLI artifact
         uses: actions/upload-artifact@v4
         with:
-          name: cli-${{ matrix.tool }}-${{ matrix.rid }}
-          path: ${{ runner.temp }}/${{ matrix.tool }}-${{ matrix.rid }}.zip
+          name: cli-${{ matrix.tool }}-${{ matrix.target.rid }}
+          path: ${{ runner.temp }}/${{ matrix.tool }}-${{ matrix.target.rid }}.zip
           if-no-files-found: error
           retention-days: 7
 
