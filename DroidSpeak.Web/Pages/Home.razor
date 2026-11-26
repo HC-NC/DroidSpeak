@@ -5,8 +5,11 @@
 @using DroidSpeak.Modem
 @using DroidSpeak.Music
 @using DroidSpeak.NLP
+@using DroidSpeak.Neural
+@using DroidSpeak.Prosody
 @using Microsoft.JSInterop
 @inject IJSRuntime JS
+@inject HttpClient Http
 
 <PageTitle>DroidSpeak — Interactive Web Playground</PageTitle>
 
@@ -147,6 +150,40 @@
 					<button class="ds-chip" @onclick="ResetToDefault">↺ Reset to Default</button>
 				</div>
 			</div>
+		}
+	</section>
+
+	<section class="ds-card">
+		<div class="ds-row-between">
+			<label class="ds-label" for="ds-brain-select" style="margin:0">🧠 Prosody Engine / Brain</label>
+			<span class="ds-badge">@ActiveBrainLabel</span>
+		</div>
+
+		<div class="ds-pills" style="margin-top:0.65rem; align-items:center">
+			<select id="ds-brain-select" class="ds-input" style="max-width:22rem"
+					disabled="@(_brains is null)"
+					value="@SelectedBrain"
+					@onchange="OnBrainSelectedAsync">
+				<option value="@ClassicBrain">Rule-Based (Classic)</option>
+				@foreach (var brain in _hostedBrains)
+				{
+					<option value="@HostedKey(brain)">@brain</option>
+				}
+				@if (_localBrainModel is not null)
+				{
+					<option value="@LocalBrain">Local upload: @_localBrainName</option>
+				}
+			</select>
+
+			<label class="ds-chip">
+				📂 Load .dsbrain File
+				<InputFile OnChange="HandleBrainUpload" accept=".dsbrain" style="display:none" />
+			</label>
+		</div>
+
+		@if (!string.IsNullOrEmpty(_brainStatus))
+		{
+			<div class="ds-status @(_brainStatusIsError ? "error" : "")">@_brainStatus</div>
 		}
 	</section>
 
@@ -395,6 +432,30 @@
 	private string? DecodedResult { get; set; }
 	private bool IsError { get; set; }
 
+	// Prosody engine selection. "classic" is always available; hosted brains arrive from
+	// wwwroot/brains/manifest.json at startup and one local upload can join them per session.
+	// Any load failure falls back to RuleBasedProsodyPredictor.Shared instead of breaking audio.
+	private const string ClassicBrain = "classic";
+	private const string LocalBrain = "local";
+	private const string HostedPrefix = "host:";
+
+	private string SelectedBrain { get; set; } = ClassicBrain;
+	private BrainCatalog? _brains;
+	private IReadOnlyList<string> _hostedBrains = [];
+	private MlpModel? _localBrainModel;
+	private string? _localBrainName;
+	private IProsodyPredictor _activePredictor = RuleBasedProsodyPredictor.Shared;
+	private int _brainSequence;
+	private string? _brainStatus;
+	private bool _brainStatusIsError;
+
+	private string ActiveBrainLabel => SelectedBrain switch
+	{
+		ClassicBrain => "Rule-Based",
+		LocalBrain => "Local .dsbrain",
+		_ => HostedName(SelectedBrain),
+	};
+
 	private static readonly (string Key, string Label, string Desc)[] VoicePresets =
 	[
 		("r2", "R2 Classic", "350–1600 Hz · Expressive"),
@@ -403,9 +464,19 @@
 		("tiny", "Tiny Unit", "600–2400 Hz · Fast Chirps"),
 	];
 
-	protected override void OnInitialized()
+	protected override async Task OnInitializedAsync()
 	{
 		ApplyProfileToSliders(DroidVoiceProfile.R2);
+
+		// Populate the brain dropdown before the first render settles; an unreachable or empty
+		// manifest simply leaves "Rule-Based (Classic)" as the only choice.
+		_brains = new BrainCatalog(Http);
+		var manifest = await _brains.ListBrainsAsync();
+		_hostedBrains = manifest.Files;
+		if (manifest.Warning is not null)
+		{
+			SetBrainStatus(manifest.Warning, isError: false);
+		}
 	}
 
 	protected override async Task OnAfterRenderAsync(bool firstRender)
@@ -486,6 +557,133 @@
 		}
 	}
 
+	private static string HostedKey(string fileName) => HostedPrefix + fileName;
+	private static string HostedName(string key) => key[HostedPrefix.Length..];
+
+	private async Task OnBrainSelectedAsync(ChangeEventArgs e)
+	{
+		var value = e.Value?.ToString() ?? ClassicBrain;
+		await SelectBrainAsync(value);
+	}
+
+	/// <summary>
+	/// Switches the active prosody engine. Hosted models are fetched on demand and local uploads are
+	/// reused in memory, so re-picking an engine never re-downloads. A monotonic sequence discards a
+	/// slow fetch that a newer selection has already superseded.
+	/// </summary>
+	private async Task SelectBrainAsync(string key)
+	{
+		if (key == ClassicBrain)
+		{
+			// Invalidate any in-flight download so it cannot override this choice later.
+			++_brainSequence;
+			SelectedBrain = key;
+			_activePredictor = RuleBasedProsodyPredictor.Shared;
+			SetBrainStatus("Rule-Based prosody: the classic procedural voice.", isError: false);
+			return;
+		}
+
+		var attempt = ++_brainSequence;
+		try
+		{
+			MlpModel model;
+			if (key == LocalBrain)
+			{
+				model = _localBrainModel
+					?? throw new InvalidOperationException("No local brain is loaded.");
+			}
+			else if (key.StartsWith(HostedPrefix, StringComparison.Ordinal))
+			{
+				var fileName = HostedName(key);
+				SetBrainStatus($"Downloading {fileName}...", isError: false);
+				model = await _brains!.LoadBrainAsync(fileName);
+			}
+			else
+			{
+				throw new InvalidOperationException("Unknown prosody engine selection.");
+			}
+
+			// A newer selection landed while this one was downloading: keep its result, drop ours.
+			if (attempt != _brainSequence)
+			{
+				return;
+			}
+
+			_activePredictor = new NeuralProsodyPredictor(model);
+			SelectedBrain = key;
+			SetBrainStatus(
+				key == LocalBrain
+					? $"Neural prosody active: local brain '{_localBrainName}' ({model.LayerCount} layers)."
+					: $"Neural prosody active: {HostedName(key)} ({model.LayerCount} layers).",
+				isError: false);
+		}
+		catch (OperationCanceledException)
+		{
+			if (attempt == _brainSequence)
+			{
+				SetBrainStatus("Prosody engine switch cancelled.", isError: false);
+			}
+		}
+		catch (Exception ex)
+		{
+			if (attempt != _brainSequence)
+			{
+				return;
+			}
+
+			// Graceful fallback: the classic voice always survives a broken or missing brain.
+			if (key == LocalBrain)
+			{
+				_localBrainModel = null;
+				_localBrainName = null;
+			}
+
+			SelectedBrain = ClassicBrain;
+			_activePredictor = RuleBasedProsodyPredictor.Shared;
+			SetBrainStatus(
+				key == LocalBrain
+					? $"Invalid brain file: {ex.Message}. Keeping Rule-Based."
+					: $"Could not load the neural prosody model ({ex.Message}). Keeping Rule-Based.",
+				isError: true);
+		}
+	}
+
+	/// <summary>
+	/// Reads a user-selected <c>.dsbrain</c> entirely client-side and registers it as the local
+	/// upload option without sending any bytes to the server.
+	/// </summary>
+	private async Task HandleBrainUpload(InputFileChangeEventArgs e)
+	{
+		var fileName = e.File.Name;
+		try
+		{
+			IsBusy = true;
+			var bytes = await ReadBrowserFileWithProgressAsync(
+				e.File, BrainCatalog.MaxBrainBytes, startPct: 0, endPct: 60);
+			var model = BrainCatalog.LoadBrainBytes(bytes);
+
+			_localBrainModel = model;
+			_localBrainName = fileName;
+			await SelectBrainAsync(LocalBrain);
+		}
+		catch (Exception ex) when (ex is not OperationCanceledException)
+		{
+			SetBrainStatus($"Invalid brain file: {ex.Message}. Keeping the current engine.", isError: true);
+		}
+		finally
+		{
+			IsBusy = false;
+			RenderProgress = 0;
+		}
+	}
+
+	private void SetBrainStatus(string message, bool isError)
+	{
+		_brainStatus = message;
+		_brainStatusIsError = isError;
+	}
+
+
 
 	private async Task SynthesizeSpeech()
 	{
@@ -501,7 +699,9 @@
 
 		try
 		{
-			var synth = new DroidSynthesizer(profile: BuildActiveProfile());
+			var synth = new DroidSynthesizer(
+				profile: BuildActiveProfile(),
+				predictor: _activePredictor);
 			var stream = synth.CreateStream(SpeechText);
 
 			var phrases = TextParser.Parse(SpeechText);
@@ -751,7 +951,9 @@
 
 		try
 		{
-			var synth = new DroidSynthesizer(profile: BuildActiveProfile());
+			var synth = new DroidSynthesizer(
+				profile: BuildActiveProfile(),
+				predictor: _activePredictor);
 			var speech = synth.Synthesize(ModemText);
 			var mixed = DroidModemEncoder.EncodeIntoSpeech(
 				ModemText,
