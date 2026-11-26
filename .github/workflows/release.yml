@@ -50,8 +50,127 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v')
         run: dotnet pack DroidSpeak.Core/DroidSpeak.Core.csproj --configuration Release --no-build --output ./artifacts
 
-      - name: Generate changelog from commits
+      - name: Upload NuGet packages
         if: startsWith(github.ref, 'refs/tags/v')
+        uses: actions/upload-artifact@v4
+        with:
+          name: nuget-packages
+          path: ./artifacts/*.nupkg
+          if-no-files-found: error
+          retention-days: 7
+
+  # Tagged releases ship self-contained single-file CLI binaries for both tools.
+  # Each matrix leg runs on its target OS so AOT-free runtime packs, native
+  # dependencies (Demo's MiniAudio library) and executable permissions inside
+  # the ZIPs all come out right without any cross-OS hacks.
+  publish-cli:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build-and-test
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        tool: [ DroidSpeak.Trainer, DroidSpeak.Demo ]
+        include:
+          - rid: win-x64
+            os: windows-latest
+          - rid: linux-x64
+            os: ubuntu-latest
+          - rid: osx-arm64
+            os: macos-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Publish ${{ matrix.tool }} (${{ matrix.rid }})
+        run: >
+          dotnet publish ${{ matrix.tool }}/${{ matrix.tool }}.csproj
+          -c Release
+          -r ${{ matrix.rid }}
+          --self-contained true
+          -p:PublishSingleFile=true
+          -p:IncludeNativeLibrariesForSelfExtract=true
+          -p:EnableCompressionInSingleFile=true
+          -o ${{ runner.temp }}/publish-${{ matrix.tool }}-${{ matrix.rid }}
+
+      - name: Smoke-test published binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          bin="${{ runner.temp }}/publish-${{ matrix.tool }}-${{ matrix.rid }}/${{ matrix.tool }}"
+          if [ -f "$bin.exe" ]; then bin="$bin.exe"; fi
+          "$bin" --help > /dev/null
+          if [ "${{ matrix.tool }}" = "DroidSpeak.Trainer" ]; then
+            "$bin" selftest
+          else
+            "$bin" "Beep boop!" --no-play -o smoke.wav
+            test -s smoke.wav
+          fi
+
+      - name: Zip binaries (Unix)
+        if: matrix.rid != 'win-x64'
+        shell: bash
+        run: |
+          set -euo pipefail
+          stage="${{ runner.temp }}/publish-${{ matrix.tool }}-${{ matrix.rid }}"
+          # Unix zips must carry the executable bit for the single-file apphost.
+          chmod +x "$stage/${{ matrix.tool }}"
+          ( cd "$stage" && zip -r -q "${{ runner.temp }}/${{ matrix.tool }}-${{ matrix.rid }}.zip" . )
+
+      - name: Zip binaries (Windows)
+        if: matrix.rid == 'win-x64'
+        shell: pwsh
+        run: |
+          Compress-Archive `
+            -Path "${{ runner.temp }}/publish-${{ matrix.tool }}-${{ matrix.rid }}/*" `
+            -DestinationPath "${{ runner.temp }}/${{ matrix.tool }}-${{ matrix.rid }}.zip"
+
+      - name: Upload CLI artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cli-${{ matrix.tool }}-${{ matrix.rid }}
+          path: ${{ runner.temp }}/${{ matrix.tool }}-${{ matrix.rid }}.zip
+          if-no-files-found: error
+          retention-days: 7
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [ build-and-test, publish-cli ]
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Download all release artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: nuget-packages
+          path: ./artifacts
+
+      - name: Download CLI archives
+        uses: actions/download-artifact@v4
+        with:
+          pattern: cli-*
+          path: ./artifacts
+          merge-multiple: true
+
+      - name: Generate changelog from commits
         id: changelog
         run: |
           PREV_TAG=$(git describe --tags --abbrev=0 "${GITHUB_REF#refs/tags/}^" 2>/dev/null || echo "")
@@ -65,29 +184,29 @@ jobs:
             echo "## What's Changed"
             echo ""
             echo "$NOTES"
+            echo ""
+            echo "## CLI binaries"
+            echo ""
+            echo "Self-contained single-file builds of \`DroidSpeak.Trainer\` and \`DroidSpeak.Demo\`"
+            echo "for win-x64, linux-x64 and osx-arm64 are attached below as \`*.zip\` archives."
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
 
       - name: Create GitHub Release
-        if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          files: ./artifacts/*.*nupkg
+          files: ./artifacts/*
           body: ${{ steps.changelog.outputs.notes }}
           generate_release_notes: true
 
       - name: NuGet Login
-        if: startsWith(github.ref, 'refs/tags/v')
         uses: NuGet/login@v1
         id: login
         with:
           user: HC-NC
 
       - name: Push package to NuGet.org
-        if: startsWith(github.ref, 'refs/tags/v')
         run: dotnet nuget push ./artifacts/*.nupkg --api-key ${{ steps.login.outputs.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json --skip-duplicate
 
       - name: Push package to GitHub Packages
-        if: startsWith(github.ref, 'refs/tags/v')
         run: dotnet nuget push ./artifacts/*.nupkg --api-key ${{ secrets.GITHUB_TOKEN }} --source https://nuget.pkg.github.com/HC-NC/index.json --skip-duplicate
-

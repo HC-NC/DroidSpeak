@@ -19,11 +19,12 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  build-and-deploy:
+  # The Pages artifact must be fully finalized before deployment starts; running
+  # upload and deploy inside a single job can race the artifact metadata store
+  # ("artifact belongs to a different run" errors). Two jobs with an explicit
+  # `needs` edge make the handoff deterministic.
+  build:
     runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
 
     steps:
       - name: Checkout repository
@@ -43,6 +44,9 @@ jobs:
           cp ./gh-pages-out/wwwroot/index.html ./gh-pages-out/wwwroot/404.html
           touch ./gh-pages-out/wwwroot/.nojekyll
 
+      - name: Verify the brains manifest is published
+        run: test -f ./gh-pages-out/wwwroot/brains/manifest.json
+
       - name: Setup Pages
         uses: actions/configure-pages@v5
 
@@ -51,6 +55,14 @@ jobs:
         with:
           path: ./gh-pages-out/wwwroot
 
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
