@@ -1,4 +1,5 @@
 ﻿using System.Buffers;
+using DroidSpeak.Neural;
 using DroidSpeak.NLP;
 using DroidSpeak.Prosody;
 
@@ -68,6 +69,73 @@ public sealed class DroidSynthesizer
 
     /// <summary>The default voice profile used when a call does not supply one.</summary>
     public DroidVoiceProfile Profile => _profile;
+
+    /// <summary>
+    /// Creates a synthesizer whose prosody is predicted by a <c>.dsbrain</c> neural model read from
+    /// disk — the one-call equivalent of <c>MlpModel.Load(path)</c> plus <see cref="Neural.NeuralProsodyPredictor"/>.
+    /// <para>
+    /// The classic procedural voice stays the default: use this overload (or the byte-overload
+    /// <see cref="FromBrainBytes"/>) only when a trained model is available, and fall back to
+    /// <see cref="RuleBasedProsodyPredictor.Shared"/> when the file is missing or malformed.
+    /// </para>
+    /// </summary>
+    /// <param name="brainPath">Path to a <c>.dsbrain</c> container written by <see cref="MlpModel.Save"/>.</param>
+    /// <param name="sampleRate">Output sample rate in Hz (8000–192000).</param>
+    /// <param name="seed">Global seed mixed into every syllable seed. Defaults to <c>0</c>.</param>
+    /// <param name="profile">Voice profile. Defaults to <see cref="DroidVoiceProfile.R2"/>.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="brainPath"/> is null.</exception>
+    /// <exception cref="FileNotFoundException">No file exists at <paramref name="brainPath"/>.</exception>
+    /// <exception cref="IOException">The file exists but cannot be opened for reading.</exception>
+    /// <exception cref="System.IO.InvalidDataException">
+    /// The file is not a valid <c>.dsbrain</c> container.
+    /// </exception>
+    /// <exception cref="ArgumentException">
+    /// The model's input or output width does not match the syllable feature window and frame vector.
+    /// </exception>
+    public static DroidSynthesizer FromBrainFile(
+        string brainPath,
+        int sampleRate = DefaultSampleRate,
+        int seed = 0,
+        DroidVoiceProfile? profile = null)
+    {
+        ArgumentNullException.ThrowIfNull(brainPath);
+        using var stream = File.Open(brainPath, FileMode.Open, FileAccess.Read, FileShare.Read);
+        return FromBrainModel(MlpModel.Load(stream), sampleRate, seed, profile);
+    }
+
+    /// <summary>
+    /// Creates a synthesizer whose prosody is predicted by a <c>.dsbrain</c> neural model that was
+    /// already read into memory — the natural form for hosts that fetched the model over HTTP,
+    /// embedded it as a resource, or received it from a file picker.
+    /// </summary>
+    /// <param name="brainData">The complete <c>.dsbrain</c> container bytes.</param>
+    /// <param name="sampleRate">Output sample rate in Hz (8000–192000).</param>
+    /// <param name="seed">Global seed mixed into every syllable seed. Defaults to <c>0</c>.</param>
+    /// <param name="profile">Voice profile. Defaults to <see cref="DroidVoiceProfile.R2"/>.</param>
+    /// <exception cref="System.IO.InvalidDataException">
+    /// The bytes are not a valid <c>.dsbrain</c> container.
+    /// </exception>
+    /// <exception cref="ArgumentException">
+    /// The model's input or output width does not match the syllable feature window and frame vector.
+    /// </exception>
+    public static DroidSynthesizer FromBrainBytes(
+        ReadOnlySpan<byte> brainData,
+        int sampleRate = DefaultSampleRate,
+        int seed = 0,
+        DroidVoiceProfile? profile = null) =>
+        FromBrainModel(MlpModel.Load(brainData), sampleRate, seed, profile);
+
+    /// <summary>
+    /// Creates a synthesizer around an already loaded model. Kept private so the two public factories
+    /// share one shape-validation path: <see cref="Neural.NeuralProsodyPredictor"/> rejects any
+    /// network whose widths do not match the encoder window and the frame vector.
+    /// </summary>
+    private static DroidSynthesizer FromBrainModel(
+        MlpModel model,
+        int sampleRate,
+        int seed,
+        DroidVoiceProfile? profile) =>
+        new(sampleRate, seed, profile, new NeuralProsodyPredictor(model));
 
     /// <summary>Synthesizes text into a newly allocated mono buffer.</summary>
     /// <param name="text">Text to speak.</param>

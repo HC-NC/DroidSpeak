@@ -22,6 +22,25 @@ public sealed partial class MlpModel
     private const int TensorChunkBytes = 4 * 128;
 
     /// <summary>
+    /// Reads a model from a <c>.dsbrain</c> file on disk. The file is opened, validated and closed
+    /// before the model is returned, so no stream handle outlives the call.
+    /// </summary>
+    /// <param name="path">Path to a <c>.dsbrain</c> container.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="path"/> is null.</exception>
+    /// <exception cref="FileNotFoundException">No file exists at <paramref name="path"/>.</exception>
+    /// <exception cref="IOException">The file exists but cannot be opened for reading.</exception>
+    /// <exception cref="InvalidDataException">
+    /// The file is truncated, carries an unknown version, describes an inconsistent or oversized
+    /// network, or holds a non-finite weight.
+    /// </exception>
+    public static MlpModel Load(string path)
+    {
+        ArgumentNullException.ThrowIfNull(path);
+        using var stream = File.Open(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+        return Load(stream);
+    }
+
+    /// <summary>
     /// Writes the model to <paramref name="stream"/> as a <c>.dsbrain</c> container. The stream is
     /// not closed.
     /// </summary>
