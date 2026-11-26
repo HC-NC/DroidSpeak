@@ -1,0 +1,85 @@
+name: Feature request
+description: Suggest a new voice preset, DSP/neural capability, or modem enhancement.
+title: "[Feature]: "
+labels: [ "enhancement", "needs-triage" ]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for helping shape DroidSpeak! ✨
+
+        Please search [existing issues](https://github.com/HC-NC/DroidSpeak/issues) and
+        [Discussions](https://github.com/HC-NC/DroidSpeak/discussions) first. For open-ended
+        ideas or "how do I..." questions, start a discussion instead of opening an issue.
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Feature area
+      description: What kind of enhancement are you proposing?
+      options:
+        - New voice preset / voice profile
+        - DSP synthesis (FM, formants, envelopes, expressive layer)
+        - Neural prosody (MLP, training, .dsbrain format)
+        - Text / syllable / emotion analysis
+        - Music (MIDI / RTTTL)
+        - Acoustic modem (FEC, modes, streaming)
+        - Real-time streaming / allocation behavior
+        - CLI tools (Demo / Trainer)
+        - Web playground / Blazor WASM
+        - Documentation / developer experience
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or motivation
+      description: >-
+        What problem does this solve, or what use case does it unlock? Describe the gap
+        in the current behavior.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: >-
+        Describe the feature as concretely as you can. For a voice preset, list the target
+        parameters (e.g. base/max frequency, pitch curve, formants, saturation). For DSP or
+        neural features, describe the expected inputs, outputs, and any format changes.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Other approaches or workarounds you have considered.
+    validations:
+      required: false
+
+  - type: textarea
+    id: additional
+    attributes:
+      label: Additional context
+      description: Examples, mockups, reference audio, links to similar implementations, or a draft API.
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: constraints
+    attributes:
+      label: Compatibility expectations
+      description: Please confirm your proposal respects the project's design constraints.
+      options:
+        - label: This feature can be implemented without adding third-party dependencies to `DroidSpeak.Core`.
+          required: false
+        - label: This feature can remain NativeAOT- and trim-safe (no reflection).
+          required: false
+        - label: This feature does not break existing `.dsbrain`/`.dsdata` or CLI archive formats, or would require a documented, versioned format change.
+          required: false
+        - label: I have searched existing issues and discussions and this is not a duplicate.
+          required: true

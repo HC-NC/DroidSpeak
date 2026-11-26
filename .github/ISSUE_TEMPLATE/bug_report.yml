@@ -1,0 +1,102 @@
+name: Bug report
+description: Report a defect in DroidSpeak.Core, the CLI tools, the trainer, or the Web playground.
+title: "[Bug]: "
+labels: [ "bug", "needs-triage" ]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a bug report! 🐞
+
+        Before you continue, please search [existing issues](https://github.com/HC-NC/DroidSpeak/issues)
+        to avoid duplicates. If you have a question rather than a defect, use
+        [Discussions](https://github.com/HC-NC/DroidSpeak/discussions) instead.
+
+  - type: dropdown
+    id: component
+    attributes:
+      label: Affected component
+      description: Which part of DroidSpeak is misbehaving?
+      options:
+        - DroidSpeak.Core (library)
+        - DroidSpeak.Demo (CLI / REPL)
+        - DroidSpeak.Trainer (distill / extract / finetune)
+        - DroidSpeak.Web (Blazor WebAssembly playground)
+        - Neural prosody (.dsbrain model)
+        - Acoustic modem
+        - Music (MIDI / RTTTL)
+        - Other / not sure
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: DroidSpeak version
+      description: >-
+        The NuGet package version, CLI release tag, or commit hash you are running.
+        Run `DroidSpeak.Demo --help` or `dotnet list package` if you are unsure.
+      placeholder: "e.g. 1.0.0, v1.0.0, or commit 57449d8"
+    validations:
+      required: true
+
+  - type: input
+    id: environment
+    attributes:
+      label: OS / runtime
+      description: Operating system, architecture, and .NET runtime/SDK version.
+      placeholder: "e.g. Windows 11 x64, .NET 10.0.100; or Ubuntu 24.04, .NET 10.0.x"
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: >-
+        A minimal, self-contained list of steps. Include the exact command, input text,
+        voice profile, sample rate, seed, and any `.dsbrain`/`.dsdata`/MIDI files if relevant.
+        Prefer a short code snippet or CLI invocation over a description.
+      placeholder: |
+        1. Run `./DroidSpeak.Demo "Beep boop!" -v r2 --no-play -o out.wav`
+        2. ...
+        3. ...
+      render: shell
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: What did you expect to happen?
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: What actually happened? Include the full error, stack trace, or unexpected audio characteristics.
+      render: text
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs, stack traces, or audio analysis
+      description: Paste any console output, exceptions, or spectrogram notes. This field is rendered as code.
+      render: text
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Confirmation
+      options:
+        - label: I have searched existing issues and this is not a duplicate.
+          required: true
+        - label: I am using a supported version (see SECURITY.md) or the latest `main`.
+          required: true
