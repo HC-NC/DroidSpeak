@@ -424,6 +424,68 @@
         return `rgb(${Math.round(56 + t * 199)}, ${Math.round(189 + t * 66)}, 255)`;
     },
 
+    // ---- Microphone capture for the acoustic modem ----
+    micState: null,
+
+    startMicCapture: async function (dotNetRef) {
+        if (this.micState) return this.micState.sampleRate;
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+            throw new Error('getUserMedia is not available in this browser');
+        }
+
+        const stream = await navigator.mediaDevices.getUserMedia({
+            audio: {
+                echoCancellation: false,
+                noiseSuppression: false,
+                autoGainControl: false,
+                channelCount: 1
+            }
+        });
+
+        const AudioCtor = window.AudioContext || window.webkitAudioContext;
+        if (!AudioCtor) {
+            stream.getTracks().forEach(track => track.stop());
+            throw new Error('Web Audio is not available');
+        }
+
+        const ctx = new AudioCtor();
+        if (ctx.state === 'suspended') await ctx.resume();
+
+        const source = ctx.createMediaStreamSource(stream);
+        const processor = ctx.createScriptProcessor(4096, 1, 1);
+        const mute = ctx.createGain();
+        mute.gain.value = 0;
+
+        const state = { ctx, stream, source, processor, mute, sampleRate: ctx.sampleRate };
+        this.micState = state;
+
+        processor.onaudioprocess = event => {
+            if (this.micState !== state) return;
+            const input = event.inputBuffer.getChannelData(0);
+            const copy = new Float32Array(input.length);
+            copy.set(input);
+            dotNetRef.invokeMethodAsync('OnMicSamples', copy, state.sampleRate)
+                .catch(() => { });
+        };
+
+        source.connect(processor);
+        processor.connect(mute);
+        mute.connect(ctx.destination);
+        return state.sampleRate;
+    },
+
+    stopMicCapture: function () {
+        const state = this.micState;
+        if (!state) return;
+        this.micState = null;
+
+        try { state.processor.disconnect(); } catch (_) { }
+        try { state.source.disconnect(); } catch (_) { }
+        try { state.mute.disconnect(); } catch (_) { }
+        try { state.stream.getTracks().forEach(track => track.stop()); } catch (_) { }
+        try { state.ctx.close(); } catch (_) { }
+    },
+
     drawSpectrumIdle: function (canvas) {
         if (!canvas) return;
         this.clearCanvas(canvas);

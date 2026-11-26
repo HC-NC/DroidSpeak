@@ -5,6 +5,7 @@
 @using DroidSpeak.Modem
 @using DroidSpeak.Music
 @using DroidSpeak.NLP
+@using Microsoft.JSInterop
 @inject IJSRuntime JS
 
 <PageTitle>DroidSpeak — Interactive Web Playground</PageTitle>
@@ -209,14 +210,28 @@
 		}
 		else if (ActiveTab == TabMode.Modem)
 		{
+			<label class="ds-label">2. Transmission Mode</label>
+			<div class="ds-pills" style="margin-top:0.65rem">
+				<button class="ds-pill @(SelectedModemMode == ModemMode.HighBandOverlay ? "active" : "")"
+						@onclick="() => SelectedModemMode = ModemMode.HighBandOverlay">
+					<strong>High-band overlay</strong>
+					<span>14.6–17 kHz · full voice untouched</span>
+				</button>
+				<button class="ds-pill @(SelectedModemMode == ModemMode.AudibleChirpStream ? "active" : "")"
+						@onclick="() => SelectedModemMode = ModemMode.AudibleChirpStream">
+					<strong>Audible chirp stream</strong>
+					<span>2.3–4.3 kHz · pause-safe chirps</span>
+				</button>
+			</div>
+
 			<div class="ds-subtabs">
-				<button class="ds-chip @(ModemSubMode == 0 ? "active" : "")" @onclick="() => { ModemSubMode = 0; DecodedResult = null; }">📤 Encode into Speech</button>
-				<button class="ds-chip @(ModemSubMode == 1 ? "active" : "")" @onclick="() => { ModemSubMode = 1; DecodedResult = null; }">📥 Decode from .WAV File</button>
+				<button class="ds-chip @(ModemSubMode == 0 ? "active" : "")" @onclick="() => { ModemSubMode = 0; DecodedResult = null; ModemDiagnostics = null; }">📤 Encode into Speech</button>
+				<button class="ds-chip @(ModemSubMode == 1 ? "active" : "")" @onclick="() => { ModemSubMode = 1; DecodedResult = null; ModemDiagnostics = null; }">📥 Decode from .WAV / Mic</button>
 			</div>
 
 			@if (ModemSubMode == 0)
 			{
-				<label class="ds-label">2. Secret UTF-8 Message to Embed into Droid Speech (max 255 bytes)</label>
+				<label class="ds-label">3. Secret UTF-8 Message to Embed into Droid Speech (max 255 bytes)</label>
 				<input class="ds-input" type="text" @bind="ModemText" @bind:event="oninput"
 					   placeholder="Secret coordinates: 56.0153, 92.8932" />
 
@@ -224,16 +239,38 @@
 					<button class="ds-btn primary" disabled="@IsBusy" @onclick="EncodeModem">
 						@(IsBusy ? "⏳ Encoding..." : "📡 Encode & Play")
 					</button>
+					<button class="ds-btn" disabled="@IsBusy" @onclick="StartMicListen">
+						@(_isListening ? "🎙️ Listening..." : "🎙️ Listen for Packets")
+					</button>
+					@if (_isListening)
+					{
+						<button class="ds-btn" @onclick="StopMicListen">⏹ Stop</button>
+					}
 				</div>
 			}
 			else
 			{
-				<label class="ds-label">2. Upload a 16-bit PCM .WAV File Containing FSK Droid Speech</label>
+				<label class="ds-label">3. Upload a 16-bit PCM .WAV File or Listen Live</label>
 				<div class="ds-actions">
 					<label class="ds-btn primary">
 						📂 Choose .WAV File to Decode
 						<InputFile OnChange="HandleWavDecodeUpload" accept=".wav" style="display:none" />
 					</label>
+					<button class="ds-btn" disabled="@IsBusy" @onclick="StartMicListen">
+						@(_isListening ? "🎙️ Listening..." : "🎙️ Listen for Packets")
+					</button>
+					@if (_isListening)
+					{
+						<button class="ds-btn" @onclick="StopMicListen">⏹ Stop</button>
+					}
+				</div>
+			}
+
+			@if (!string.IsNullOrEmpty(_micStatus))
+			{
+				<div class="ds-modem-box">
+					<span class="ds-modem-tag">MICROPHONE</span>
+					<code>@_micStatus</code>
 				</div>
 			}
 
@@ -242,6 +279,14 @@
 				<div class="ds-modem-box">
 					<span class="ds-modem-tag">FFT DECODER OUTPUT</span>
 					<code>@DecodedResult</code>
+				</div>
+			}
+
+			@if (!string.IsNullOrEmpty(ModemDiagnostics))
+			{
+				<div class="ds-modem-box">
+					<span class="ds-modem-tag">FEC / CRC DIAGNOSTICS</span>
+					<code>@ModemDiagnostics</code>
 				</div>
 			}
 		}
@@ -332,6 +377,12 @@
 	private string SpeechText { get; set; } = "Beep-beep! Hello there, systems are online!";
 	private string RtttlInput { get; set; } = "OdeToJoy:d=4,o=5,b=125:e,e,f,g,g,f,e,d,c,c,d,e,e.,8d,2d";
 	private string ModemText { get; set; } = "Secret coordinates: 56.0153, 92.8932";
+	private ModemMode SelectedModemMode { get; set; } = ModemMode.HighBandOverlay;
+	private string? ModemDiagnostics { get; set; }
+	private StreamingAcousticDemodulator? _micDemodulator;
+	private DotNetObjectReference<Home>? _micReference;
+	private bool _isListening;
+	private string? _micStatus;
 
 	private bool SoloMelodyOnly { get; set; } = true;
 	private float[]? LastSamples { get; set; }
@@ -625,15 +676,21 @@
 			await StepProgressAsync(65, "Parsing 16-bit PCM WAV header...");
 			var (samples, sampleRate) = WavReader.ReadMonoPcm16(bytes);
 
-			await StepProgressAsync(85, "Running FFT demodulator & Hamming ECC...");
-			var decoded = DroidModemDecoder.Decode(samples, sampleRate);
+			await StepProgressAsync(85, "Running FFT demodulator, Hamming FEC & CRC-16...");
+			if (DroidModemDecoder.TryDecode(samples, sampleRate, out var result))
+			{
+				DecodedResult = result.Text;
+				ModemDiagnostics = DescribeModemResult(result);
+				SetStatus($"Successfully decoded {result.Text.Length} characters from {e.File.Name}.");
+			}
+			else
+			{
+				DecodedResult = "<no valid droid packet found in this WAV>";
+				ModemDiagnostics = null;
+				SetStatus($"Finished scanning {e.File.Name}, no modem payload detected.");
+			}
 
 			await StepProgressAsync(100, "Done!");
-
-			DecodedResult = decoded ?? "<no valid FSK droid packet found in this WAV>";
-			SetStatus(decoded is not null
-				? $"Successfully decoded {decoded.Length} characters from {e.File.Name}."
-				: $"Finished scanning {e.File.Name}, no FSK payload detected.");
 		}
 		catch (Exception ex)
 		{
@@ -689,18 +746,32 @@
 		}
 
 		IsBusy = true;
-		SetStatus("Encoding FSK packet into speech...");
+		SetStatus($"Encoding {SelectedModemMode} packet into speech...");
 		await Task.Yield();
 
 		try
 		{
 			var synth = new DroidSynthesizer(profile: BuildActiveProfile());
 			var speech = synth.Synthesize(ModemText);
-			var mixed = DroidModemEncoder.EncodeIntoSpeech(ModemText, speech, synth.SampleRate);
+			var mixed = DroidModemEncoder.EncodeIntoSpeech(
+				ModemText,
+				speech,
+				SelectedModemMode,
+				synth.SampleRate);
 
-			DecodedResult = DroidModemDecoder.Decode(mixed, synth.SampleRate) ?? "<self-check decode failed>";
+			if (DroidModemDecoder.TryDecode(mixed, synth.SampleRate, out var result))
+			{
+				DecodedResult = result.Text;
+				ModemDiagnostics = DescribeModemResult(result);
+			}
+			else
+			{
+				DecodedResult = "<self-check decode failed>";
+				ModemDiagnostics = null;
+			}
+
 			_autoplayPlayer = true;
-			await LoadIntoPlayer(mixed, synth.SampleRate, "droid_transmit.wav", "FSK Stego Ready");
+			await LoadIntoPlayer(mixed, synth.SampleRate, "droid_transmit.wav", $"{SelectedModemMode} Ready");
 		}
 		catch (Exception ex)
 		{
@@ -710,6 +781,93 @@
 		{
 			IsBusy = false;
 		}
+	}
+
+	private static string DescribeModemResult(ModemDecodeResult result) =>
+		$"{result.Mode} · CRC {(result.CrcValid ? "OK" : "FAIL")} · " +
+		$"FEC corrected {result.CorrectedBits} bit(s) · " +
+		$"clock {result.ClockDriftPpm.ToString("+0;-0;0", CultureInfo.InvariantCulture)} ppm" +
+		(result.Legacy ? " · legacy v0.8" : string.Empty);
+
+	private async Task StartMicListen()
+	{
+		if (_isListening)
+		{
+			return;
+		}
+
+		try
+		{
+			_micReference?.Dispose();
+			_micReference = DotNetObjectReference.Create(this);
+			var sampleRate = await JS.InvokeAsync<int>("droidAudio.startMicCapture", _micReference);
+
+			if (SelectedModemMode == ModemMode.HighBandOverlay && sampleRate < 38000)
+			{
+				throw new InvalidOperationException(
+					$"High-band overlay needs at least 38 kHz; this microphone runs at {sampleRate} Hz. " +
+					"Choose Audible chirp stream instead.");
+			}
+
+			_micDemodulator = new StreamingAcousticDemodulator(sampleRate);
+			_isListening = true;
+			_micStatus = $"Listening at {sampleRate} Hz with {SelectedModemMode}...";
+			SetStatus(_micStatus);
+		}
+		catch (Exception ex)
+		{
+			_micDemodulator = null;
+			_micReference?.Dispose();
+			_micReference = null;
+			_isListening = false;
+			_micStatus = null;
+			SetError($"Microphone unavailable: {ex.Message}");
+		}
+	}
+
+	private async Task StopMicListen()
+	{
+		try
+		{
+			await JS.InvokeVoidAsync("droidAudio.stopMicCapture");
+		}
+		catch (JSException)
+		{
+			// The browser may have already torn down the capture context.
+		}
+
+		_micDemodulator = null;
+		_micReference?.Dispose();
+		_micReference = null;
+		_isListening = false;
+		_micStatus = "Microphone stopped.";
+		SetStatus(_micStatus);
+	}
+
+	[JSInvokable]
+	public Task OnMicSamples(float[] samples, int sampleRate)
+	{
+		if (!_isListening || _micDemodulator is null || sampleRate != _micDemodulator.SampleRate)
+		{
+			return Task.CompletedTask;
+		}
+
+		_micDemodulator.Feed(samples);
+		while (_micDemodulator.TryReadPacket(out var result))
+		{
+			var text = result.Text;
+			var diagnostics = DescribeModemResult(result);
+			_ = InvokeAsync(() =>
+			{
+				DecodedResult = text;
+				ModemDiagnostics = diagnostics;
+				_micStatus = $"Packet received at {sampleRate} Hz.";
+				SetStatus(_micStatus);
+				StateHasChanged();
+			});
+		}
+
+		return Task.CompletedTask;
 	}
 
 	private async Task LoadIntoPlayer(float[] samples, int sampleRate, string fileName, string details)

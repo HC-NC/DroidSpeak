@@ -24,7 +24,7 @@
 - **Rich Analog/Vocal DSP (`DroidSpeak.DSP`, v0.5.0):** Optional per-syllable vowel formant bank (Latin/Cyrillic nuclei mapped to F1/F2), inharmonic ring modulation, three-point pitch arcs, energy-driven attack chirps, soft analog saturation and early-reflection ambience, all profile-driven and zero-allocation.
 - **Polyphonic Music & Melody Engine (`DroidSpeak.Music`):** Built-in zero-dependency parsers for Standard MIDI Files (`.mid`, SMF Format 0 & 1) and RTTTL ringtones, rendered with an expressive lead droid voice (portamento glides, trills, upward chirps) and relay-click percussion, plus a `--solo` lead-only mode.
 - **Customizable Voice Profiles:** Built-in presets (`R2`, `Grumpy`, `Bass`, `Tiny`) plus JSON serialization to craft custom droid personalities.
-- **Acoustic Steganography Modem (`DroidSpeak.Modem`):** Hides UTF-8 text payloads inside droid speech using FSK (3400 / 4400 Hz) with Hamming(12,8) forward error correction, bit interleaving, CRC-8, and an in-house radix-2 FFT decoder.
+- **Rich-Spectrum Acoustic Modem (`DroidSpeak.Modem`, v0.9.0):** Hides UTF-8 payloads without filtering the droid voice. `HighBandOverlay` keeps the entire audible band intact and adds shaped 4-FSK tones at 14.6–17 kHz; `AudibleChirpStream` uses 2.3–4.3 kHz chirps in pauses. Hamming(7,4) FEC, interleaving, CRC-16, periodic timing pilots, clock-drift tracking, and a streaming demodulator are included. Legacy v0.8 recordings still decode.
 - **Allocation-Friendly API:** Supports writing directly into pre-allocated `Span<float>` buffers alongside 16-bit mono PCM `.wav` export.
 
 ## Audio Demos
@@ -50,9 +50,9 @@ https://github.com/user-attachments/assets/9d936f29-e37c-4f2a-af88-7e1a1bbf1a22
 </details>
 
 <details>
-<summary>🔊 <b>3. Acoustic Modem (<code>FSK Stego</code>)</b> — <i>Hidden UTF-8 payload embedded in speech</i></summary>
+<summary>🔊 <b>3. Rich-Spectrum Acoustic Modem (<code>HighBandOverlay</code>)</b> — <i>Full voice preserved, data above the audible band</i></summary>
 
-> `/transmit Secret coordinates: 56.0153, 92.8932`
+> `/transmit --mode high Secret coordinates: 56.0153, 92.8932`
 
 https://github.com/user-attachments/assets/fe18eafe-f8b1-4112-b45c-e7d553d30709
 
@@ -70,7 +70,7 @@ DroidSpeak.sln
 │   ├── Prosody/           # SyllableContext -> SyllableFrame prediction (IProsodyPredictor)
 │   ├── DSP/               # FM synthesizer, chatter generator, WAV writer
 │   ├── Music/             # MIDI & RTTTL parsers, polyphonic droid music synthesizer
-│   └── Modem/             # FSK acoustic encoder/decoder & radix-2 FFT
+│   └── Modem/             # Rich-spectrum 4-FSK encoder/decoder, FEC, streaming receiver
 ├── DroidSpeak.Demo        # Interactive CLI/REPL with live playback (SoundFlow)
 ├── DroidSpeak.Web         # Interactive Blazor WebAssembly playground (GitHub Pages)
 └── DroidSpeak.Tests       # xUnit test suite
@@ -112,7 +112,7 @@ dotnet run --project DroidSpeak.Demo -- "ALERT! Reactor overheating!" -o alert.w
 | `/voice json <file.json>` | Load a custom voice profile from JSON |
 | `/voice save <file.json>` | Save the current voice profile to JSON |
 | `/music [--solo] <file.mid\|rtttl>` | Play a MIDI file or RTTTL ringtone using the active voice (press any key to stop) |
-| `/transmit <text>` | Embed hidden UTF-8 text into droid speech, save `transmit.wav`, and decode it |
+| `/transmit [--mode high\|audible] <text>` | Embed UTF-8 text without filtering the voice, save `transmit.wav`, and report FEC/CRC diagnostics |
 | `/demo` | Play four built-in emotional test phrases |
 | `/save <file.wav>` | Save the last synthesized utterance or melody to a WAV file |
 | `/help` | Show available commands |
@@ -288,9 +288,9 @@ float[] soloSamples = musicSynth.Render(midiScore, DroidVoiceProfile.R2, soloMel
 
 Custom musical notations can also be plugged in by implementing `IScoreParser` or `ITextScoreParser`.
 
-### Acoustic Steganography Modem (`DroidSpeak.Modem`)
+### Rich-Spectrum Acoustic Modem (`DroidSpeak.Modem`)
 
-Hide up to **255 bytes** of UTF-8 text inside droid speech (~15% carrier amplitude modulated by the speech envelope) and decode it back from raw PCM audio:
+Send up to **255 bytes** of UTF-8 without cutting the voice. `HighBandOverlay` leaves the full audible band untouched and adds shaped 4-FSK tones at **14.6–17 kHz**; `AudibleChirpStream` uses **2.3–4.3 kHz** chirps in a natural pause or after the utterance.
 
 ```csharp
 using DroidSpeak.DSP;
@@ -299,14 +299,30 @@ using DroidSpeak.Modem;
 var synthesizer = new DroidSynthesizer(seed: 1);
 float[] speech = synthesizer.Synthesize("Move along, nothing to see here.");
 
-// Embed secret text into the speech signal
-float[] mixed = DroidModemEncoder.EncodeIntoSpeech("Secret coordinates: 42.19", speech, synthesizer.SampleRate);
+// Full-spectrum voice preservation (default for rich audio)
+float[] mixed = DroidModemEncoder.EncodeIntoSpeech(
+    "Secret coordinates: 42.19",
+    speech,
+    ModemMode.HighBandOverlay,
+    synthesizer.SampleRate);
 WavWriter.Write("transmit.wav", mixed, synthesizer.SampleRate);
 
-// Recover text from audio samples
-string? decoded = DroidModemDecoder.Decode(mixed, synthesizer.SampleRate);
-Console.WriteLine(decoded); // Output: Secret coordinates: 42.19
+// Decode one-shot, with FEC / CRC / clock diagnostics
+if (DroidModemDecoder.TryDecode(mixed, synthesizer.SampleRate, out var result))
+{
+    Console.WriteLine($"{result.Text} · FEC={result.CorrectedBits} · {result.ClockDriftPpm:+0;-0;0} ppm");
+}
+
+// Or decode a live microphone stream chunk by chunk
+var receiver = new StreamingAcousticDemodulator(synthesizer.SampleRate);
+receiver.Feed(micChunk);
+if (receiver.TryReadPacket(out var live))
+{
+    Console.WriteLine(live.Text);
+}
 ```
+
+> The high-band mode is preserved by 44.1/48 kHz audio hardware but is not guaranteed through codecs or speakers that low-pass below ~18 kHz. Use `AudibleChirpStream` for narrowband channels.
 
 ---
 

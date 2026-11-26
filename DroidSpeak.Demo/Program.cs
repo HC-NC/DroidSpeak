@@ -442,11 +442,12 @@ static float[]? RunDemo(VoiceSession session, bool play)
     return lastSamples;
 }
 
-static float[]? RunTransmit(VoiceSession session, string text, bool play)
+static float[]? RunTransmit(VoiceSession session, string argument, bool play)
 {
+    var (mode, text) = ParseTransmitArgument(argument);
     if (string.IsNullOrWhiteSpace(text))
     {
-        Console.WriteLine("Usage: /transmit <text>");
+        Console.WriteLine("Usage: /transmit [--mode high|audible] <text>");
         return null;
     }
 
@@ -455,7 +456,7 @@ static float[]? RunTransmit(VoiceSession session, string text, bool play)
     float[] mixed;
     try
     {
-        mixed = DroidModemEncoder.EncodeIntoSpeech(text, speech, synthesizer.SampleRate);
+        mixed = DroidModemEncoder.EncodeIntoSpeech(text, speech, mode, synthesizer.SampleRate);
     }
     catch (ArgumentException exception)
     {
@@ -465,7 +466,7 @@ static float[]? RunTransmit(VoiceSession session, string text, bool play)
 
     var path = Path.GetFullPath("transmit.wav");
     WavWriter.Write(path, mixed, synthesizer.SampleRate);
-    Console.WriteLine($"  Transmitting {text.Length} chars ({mixed.Length} samples).");
+    Console.WriteLine($"  Transmitting {text.Length} chars with {mode} ({mixed.Length} samples).");
     Console.WriteLine($"  Saved: {path} ({new FileInfo(path).Length} bytes)");
 
     if (play)
@@ -473,19 +474,61 @@ static float[]? RunTransmit(VoiceSession session, string text, bool play)
         Play(mixed, synthesizer.SampleRate);
     }
 
-    var decoded = DroidModemDecoder.Decode(mixed, synthesizer.SampleRate);
-    if (decoded is null)
+    if (DroidModemDecoder.TryDecode(mixed, synthesizer.SampleRate, out var result))
     {
-        Console.WriteLine("[Decoded from audio]: <failed to decode>");
+        var suffix = result.Text == text ? string.Empty : "  (mismatch!)";
+        Console.WriteLine($"[Decoded from audio]: {result.Text}{suffix}");
+        Console.WriteLine(
+            $"  {result.Mode} · CRC {(result.CrcValid ? "OK" : "FAIL")} · " +
+            $"FEC corrected {result.CorrectedBits} bit(s) · clock {result.ClockDriftPpm:+0;-0;0} ppm");
     }
     else
     {
-        var suffix = decoded == text ? string.Empty : "  (mismatch!)";
-        Console.WriteLine($"[Decoded from audio]: {decoded}{suffix}");
+        Console.WriteLine("[Decoded from audio]: <failed to decode>");
     }
 
     return mixed;
 }
+
+static (ModemMode Mode, string Text) ParseTransmitArgument(string argument)
+{
+    var mode = ModemMode.HighBandOverlay;
+    var text = argument.Trim();
+
+    if (text.StartsWith("--mode=", StringComparison.OrdinalIgnoreCase))
+    {
+        var separator = text.IndexOf(' ');
+        var value = separator < 0 ? text[7..] : text[7..separator];
+        mode = ParseMode(value);
+        text = separator < 0 ? string.Empty : text[(separator + 1)..].Trim();
+    }
+    else if (text.StartsWith("--mode ", StringComparison.OrdinalIgnoreCase))
+    {
+        var rest = text[7..].TrimStart();
+        var separator = rest.IndexOf(' ');
+        var value = separator < 0 ? rest : rest[..separator];
+        mode = ParseMode(value);
+        text = separator < 0 ? string.Empty : rest[(separator + 1)..].Trim();
+    }
+    else if (text.StartsWith("--audible", StringComparison.OrdinalIgnoreCase))
+    {
+        mode = ModemMode.AudibleChirpStream;
+        text = text[9..].TrimStart();
+    }
+    else if (text.StartsWith("--high", StringComparison.OrdinalIgnoreCase))
+    {
+        mode = ModemMode.HighBandOverlay;
+        text = text[6..].TrimStart();
+    }
+
+    return (mode, text);
+}
+
+static ModemMode ParseMode(string value) =>
+    value.Equals("audible", StringComparison.OrdinalIgnoreCase) ||
+    value.Equals("chirp", StringComparison.OrdinalIgnoreCase)
+        ? ModemMode.AudibleChirpStream
+        : ModemMode.HighBandOverlay;
 
 static void SaveLast(VoiceSession session, float[]? samples, string argument)
 {
@@ -740,7 +783,8 @@ static void PrintReplCommands()
     Console.WriteLine("  /brain [file.dsbrain|off]            Show, load, or disable a neural prosody model.");
     Console.WriteLine("  /music [--solo] <file.mid|rtttl>     Play a melody using the current droid voice.");
     Console.WriteLine("  /stream <text>                       Speak text by pulling real-time 1024-sample chunks.");
-    Console.WriteLine("  /transmit <text>                     Hide text in speech, save transmit.wav and decode it.");
+    Console.WriteLine("  /transmit [--mode high|audible] <text>");
+    Console.WriteLine("                                        Embed text in speech, save transmit.wav and decode it.");
     Console.WriteLine("  /demo                                Play four test phrases.");
     Console.WriteLine("  /save <file.wav>                     Save the last utterance or melody.");
     Console.WriteLine("  /help                                Show REPL commands.");
