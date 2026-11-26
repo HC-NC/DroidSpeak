@@ -16,7 +16,17 @@ public static class DroidModemEncoder
     private const float TwoPi = MathF.PI * 2f;
     private const float ModemPeak = 1f;
 
-    /// <summary>Encodes <paramref name="text"/> as a clean FSK signal.</summary>
+    /// <summary>
+    /// Encodes <paramref name="text"/> with a v0.9 rich-spectrum mode.
+    /// </summary>
+    /// <param name="text">Text to transmit (UTF-8, at most 255 bytes).</param>
+    /// <param name="mode">Physical-layer mode.</param>
+    /// <param name="sampleRate">Output sample rate in Hz.</param>
+    public static float[] Encode(string text, ModemMode mode, int sampleRate = 44100) =>
+        AcousticModulator.Encode(text, mode, sampleRate);
+
+    /// <summary>
+    /// Encodes <paramref name="text"/> as a clean FSK signal.</summary>
     /// <param name="text">Text to transmit (UTF-8, at most 255 bytes).</param>
     /// <param name="sampleRate">Output sample rate in Hz (at least 10000).</param>
     public static float[] Encode(string text, int sampleRate = 44100)
@@ -183,6 +193,28 @@ public static class DroidModemEncoder
         NormalizePeak(result);
         return result;
     }
+
+    /// <summary>
+    /// Encodes <paramref name="text"/> with a v0.9 rich-spectrum mode and places it in
+    /// <paramref name="speech"/> without filtering or normalizing the voice.
+    /// <para>
+    /// <see cref="ModemMode.HighBandOverlay"/> adds the packet above the audible voice band.
+    /// <see cref="ModemMode.AudibleChirpStream"/> uses a natural pause when one is long enough
+    /// and otherwise appends the chirps after the utterance.
+    /// </para>
+    /// </summary>
+    /// <param name="text">Text to transmit (UTF-8, at most 255 bytes).</param>
+    /// <param name="speech">Mono speech samples in <c>[-1, 1]</c>.</param>
+    /// <param name="mode">Physical-layer mode.</param>
+    /// <param name="sampleRate">Sample rate in Hz.</param>
+    /// <param name="maskLevel">Relative modem level (0.05–0.30).</param>
+    public static float[] EncodeIntoSpeech(
+        string text,
+        ReadOnlySpan<float> speech,
+        ModemMode mode,
+        int sampleRate = 44100,
+        float maskLevel = DefaultMaskLevel) =>
+        AcousticModulator.MixIntoSpeech(text, speech, mode, sampleRate, maskLevel);
 
     private static void ValidateSampleRate(int sampleRate)
     {
