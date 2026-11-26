@@ -132,14 +132,15 @@ internal static class AcousticModulator
         var headerBits = new List<int>(AcousticFrameProtocol.HeaderLength * 2 * AcousticFrameProtocol.HammingCodewordBits);
         AcousticFrameProtocol.AppendEncodedByte(headerBits, frame[0]);
         AcousticFrameProtocol.AppendEncodedByte(headerBits, frame[1]);
-        for (var i = 0; i < headerBits.Count; i += 2)
+        var header = headerBits.ToArray();
+        for (var i = 0; i < header.Length; i += 2)
         {
-            AcousticFrameProtocol.AppendPackedSymbol(symbols, headerBits.ToArray(), i);
+            AcousticFrameProtocol.AppendPackedSymbol(symbols, header, i);
         }
 
         var bodyCodewords = BuildBodyCodewords(frame);
-        var interleaved = Interleave(bodyCodewords);
-        var bodySymbolCount = AcousticFrameProtocol.SymbolsForBits(interleaved.Count);
+        var interleaved = Interleave(bodyCodewords).ToArray();
+        var bodySymbolCount = AcousticFrameProtocol.SymbolsForBits(interleaved.Length);
 
         for (var bodySymbol = 0; bodySymbol < bodySymbolCount; bodySymbol++)
         {
@@ -153,7 +154,7 @@ internal static class AcousticModulator
 
             AcousticFrameProtocol.AppendPackedSymbol(
                 symbols,
-                interleaved.ToArray(),
+                interleaved,
                 bodySymbol * 2);
         }
 

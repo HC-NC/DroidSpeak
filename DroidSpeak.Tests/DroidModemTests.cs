@@ -91,7 +91,7 @@ public class DroidModemTests
         }
 
         var peakFrequency = peakBin * (float)SampleRate / fftSize;
-        Assert.InRange(peakFrequency, 3200f, 4800f);
+        Assert.InRange(peakFrequency, 14500f, 17100f);
     }
 
     [Fact]

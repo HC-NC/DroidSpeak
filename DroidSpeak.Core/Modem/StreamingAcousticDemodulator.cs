@@ -44,6 +44,18 @@ public sealed class StreamingAcousticDemodulator
             return;
         }
 
+        if (samples.Length >= _maximumBufferedSamples)
+        {
+            if (_buffer.Length < _maximumBufferedSamples)
+            {
+                _buffer = new float[_maximumBufferedSamples];
+            }
+
+            _count = _maximumBufferedSamples;
+            samples[^_count..].CopyTo(_buffer.AsSpan(0, _count));
+            return;
+        }
+
         if (_count + samples.Length > _buffer.Length)
         {
             var required = Math.Min(_maximumBufferedSamples, _count + samples.Length);
