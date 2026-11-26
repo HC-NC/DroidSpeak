@@ -10,8 +10,13 @@ namespace DroidSpeak.Music
     /// </summary>
     public sealed class MidiParser : IScoreParser
     {
+        /// <summary>Shared stateless instance, the intended entry point.</summary>
         public static MidiParser Shared { get; } = new();
 
+        /// <summary>Parses Standard MIDI File bytes (SMF Format 0 or 1) into a <see cref="DroidScore"/>.</summary>
+        /// <param name="data">The complete <c>.mid</c> file contents.</param>
+        /// <exception cref="FormatException">The data lacks a valid <c>MThd</c> header or track structure.</exception>
+        /// <exception cref="NotSupportedException">The file uses SMPTE timing or an SMF format beyond 1.</exception>
         public DroidScore Parse(ReadOnlySpan<byte> data)
         {
             var reader = new MidiReader(data);

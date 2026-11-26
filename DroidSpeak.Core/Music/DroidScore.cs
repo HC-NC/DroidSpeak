@@ -24,6 +24,9 @@ namespace DroidSpeak.Music
     /// </summary>
     public sealed class DroidScore
     {
+        /// <summary>Creates a score from already parsed notes.</summary>
+        /// <param name="notes">Notes and percussion events in the score.</param>
+        /// <param name="title">Optional human-readable title (for example the RTTTL or SMF name).</param>
         public DroidScore(IReadOnlyList<ScoreNote> notes, string? title = null)
         {
             ArgumentNullException.ThrowIfNull(notes);
@@ -43,12 +46,19 @@ namespace DroidSpeak.Music
             TotalDurationSeconds = maxEnd;
         }
 
+        /// <summary>The optional title of the piece, or <c>null</c> when the source carried none.</summary>
         public string? Title { get; }
 
+        /// <summary>All notes and percussion events, in parsing order.</summary>
         public IReadOnlyList<ScoreNote> Notes { get; }
 
+        /// <summary>The offset of the last note end, in seconds.</summary>
         public float TotalDurationSeconds { get; }
 
+        /// <summary>
+        /// Converts a MIDI note number to its equal-tempered frequency (A4 = 69 = 440 Hz).
+        /// </summary>
+        /// <param name="midiNote">MIDI note number.</param>
         public static float MidiNoteToFrequency(int midiNote) =>
             440f * MathF.Pow(2f, (midiNote - 69) / 12f);
     }

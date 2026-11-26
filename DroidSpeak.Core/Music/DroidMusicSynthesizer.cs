@@ -11,6 +11,7 @@ namespace DroidSpeak.Music
     /// </summary>
     public sealed class DroidMusicSynthesizer
     {
+        /// <summary>The default output sample rate (Hz), shared with <see cref="DroidSynthesizer"/>.</summary>
         public const int DefaultSampleRate = DroidSynthesizer.DefaultSampleRate;
 
         private const float TwoPi = MathF.PI * 2f;
@@ -19,6 +20,9 @@ namespace DroidSpeak.Music
         private readonly int _sampleRate;
         private readonly DroidVoiceProfile _profile;
 
+        /// <summary>Creates a music synthesizer.</summary>
+        /// <param name="sampleRate">Output sample rate in Hz (8000–192000).</param>
+        /// <param name="profile">Voice profile used for the lead timbre. Defaults to <see cref="DroidVoiceProfile.R2"/>.</param>
         public DroidMusicSynthesizer(
             int sampleRate = DefaultSampleRate,
             DroidVoiceProfile? profile = null)
@@ -35,8 +39,10 @@ namespace DroidSpeak.Music
             _profile = (profile ?? DroidVoiceProfile.R2).Normalized();
         }
 
+        /// <summary>The output sample rate in Hz.</summary>
         public int SampleRate => _sampleRate;
 
+        /// <summary>The default voice profile used when a render call does not supply one.</summary>
         public DroidVoiceProfile Profile => _profile;
 
         /// <summary>

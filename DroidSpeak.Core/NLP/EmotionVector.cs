@@ -38,11 +38,14 @@ public readonly record struct EmotionVector(float Valence, float Arousal)
             Valence + (other.Valence - Valence) * amount,
             Arousal + (other.Arousal - Arousal) * amount);
 
+    /// <summary>Adds the components of two vectors. The result is clamped to the valid range.</summary>
     public static EmotionVector operator +(EmotionVector left, EmotionVector right) =>
         new(left.Valence + right.Valence, left.Arousal + right.Arousal);
 
+    /// <summary>Scales both components by <paramref name="factor"/>. The result is clamped.</summary>
     public static EmotionVector operator *(EmotionVector value, float factor) =>
         new(value.Valence * factor, value.Arousal * factor);
 
+    /// <summary>Formats the vector as <c>Emotion(V=…, A=…)</c> with two decimals.</summary>
     public override string ToString() => $"Emotion(V={Valence:0.00}, A={Arousal:0.00})";
 }

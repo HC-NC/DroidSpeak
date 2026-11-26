@@ -5,31 +5,182 @@
 [![MIT License](https://img.shields.io/github/license/HC-NC/DroidSpeak)](LICENSE)
 [![GitHub code size in bytes](https://img.shields.io/github/languages/code-size/HC-NC/DroidSpeak)](#project-structure)
 [![.NET](https://img.shields.io/badge/.NET-10.0-512BD4)](https://dotnet.microsoft.com)
-[![AOT Compatible](https://img.shields.io/badge/NativeAOT-Compatible-blue)](#features)
+[![AOT Compatible](https://img.shields.io/badge/NativeAOT-Compatible-blue)](#why-droidspeak)
 
-**Text-to-Beep Engine** — a zero-dependency, NativeAOT-compatible C# library (.NET 10) for procedural synthesis of expressive, astromech-style droid speech from arbitrary text, complete with voice profiles and an acoustic steganography modem.
+**Text-to-Beep Engine** — a zero-dependency, NativeAOT-compatible C# library (.NET 10) for procedural
+synthesis of expressive, astromech-style droid speech from arbitrary text, with polyphonic
+MIDI/RTTTL music, pluggable (optionally neural) prosody, voice profiles and an acoustic
+steganography modem.
 
 [![Launch Interactive Web Playground](https://img.shields.io/badge/Launch_Playground-Live_WASM_Demo-38BDF8?style=for-the-badge&logo=webassembly&logoColor=white)](https://hc-nc.github.io/DroidSpeak/)
 
+```bash
+dotnet add package DroidSpeak.Core
+```
+
 ---
 
-## Features
+## Why DroidSpeak
 
-- **Zero External Dependencies:** `DroidSpeak.Core` relies strictly on the .NET 10 standard library.
-- **NativeAOT & Reflection-Free:** Uses source-generated `System.Text.Json` (`DroidVoiceProfileJsonContext`), making it ready for iOS, consoles, Unity/Godot, and AOT deployments.
-- **Deterministic Synthesis:** Syllable variations are seeded via a cross-platform FNV-1a hash of lowercase words, so the same text and seed always produce identical structure and rendering behavior. Output samples are bit-identical on a given platform; across `ucrtbase`/`glibc`/`libm` they can differ by sub-ULP rounding noise that is inaudible and, for the regression tests, absorbed by the acoustic fingerprint.
-- **Emotion & Typography NLP (`DroidSpeak.NLP`):** Extracts continuous `Valence–Arousal` vectors from punctuation (`!`, `?`, `...`), `ALL CAPS`, and a built-in bilingual (EN/RU) lexicon.
-- **Pluggable Prosody (`DroidSpeak.Prosody`):** The `IProsodyPredictor` contract turns flat `SyllableContext` values into per-syllable `SyllableFrame` descriptions, fully decoupled from DSP. `RuleBasedProsodyPredictor` reproduces the classic voice bit-for-bit; custom predictors can be injected without touching the renderer.
-- **Procedural FM & Legato DSP (`DroidSpeak.DSP`):** Continuous-phase sine/triangle oscillators, dual FM modulators, exponential portamento, word-level ADSR envelopes, consonant noise/growl shaping, and procedural chatter (30 Hz trills, micro-arpeggios, relay clicks).
-- **Rich Analog/Vocal DSP (`DroidSpeak.DSP`, v0.5.0):** Optional per-syllable vowel formant bank (Latin/Cyrillic nuclei mapped to F1/F2), inharmonic ring modulation, three-point pitch arcs, energy-driven attack chirps, soft analog saturation and early-reflection ambience, all profile-driven and zero-allocation.
-- **Polyphonic Music & Melody Engine (`DroidSpeak.Music`):** Built-in zero-dependency parsers for Standard MIDI Files (`.mid`, SMF Format 0 & 1) and RTTTL ringtones, rendered with an expressive lead droid voice (portamento glides, trills, upward chirps) and relay-click percussion, plus a `--solo` lead-only mode.
-- **Customizable Voice Profiles:** Built-in presets (`R2`, `Grumpy`, `Bass`, `Tiny`) plus JSON serialization to craft custom droid personalities.
-- **Rich-Spectrum Acoustic Modem (`DroidSpeak.Modem`, v0.9.0):** Hides UTF-8 payloads without filtering the droid voice. `HighBandOverlay` keeps the entire audible band intact and adds shaped 4-FSK tones at 14.6–17 kHz; `AudibleChirpStream` uses 2.3–4.3 kHz chirps in pauses. Hamming(7,4) FEC, interleaving, CRC-16, periodic timing pilots, clock-drift tracking, and a streaming demodulator are included. Legacy v0.8 recordings still decode.
-- **Allocation-Friendly API:** Supports writing directly into pre-allocated `Span<float>` buffers alongside 16-bit mono PCM `.wav` export.
+- **Zero dependencies.** `DroidSpeak.Core` uses only the .NET 10 BCL.
+- **NativeAOT & trim safe.** Source-generated JSON, no reflection; runs on iOS, consoles, Unity/Godot
+  and Blazor WebAssembly.
+- **Deterministic.** Audio is a pure function of text + seed + profile + predictor.
+- **Allocation-friendly.** Render straight into a pre-allocated `Span<float>`, or pull a
+  `DroidSpeechStream` in real time.
+- **Pluggable prosody.** Swap the rule engine for a trained MLP (`.dsbrain`) or your own predictor.
+- **Extras included.** MIDI/RTTTL music, and a 4-FSK acoustic modem with FEC and CRCs.
 
-## Audio Demos
+## Quick start
 
-Listen to raw procedural audio generated directly by `DroidSpeak.Core` (zero samples, pure C# DSP):
+```csharp
+using DroidSpeak.DSP;
+
+var synth = new DroidSynthesizer(sampleRate: 44100, seed: 0);
+float[] samples = synth.Synthesize("Beep boop! System is ready.");
+WavWriter.Write("greeting.wav", samples, synth.SampleRate);
+
+// Zero-allocation rendering once the text is parsed:
+using DroidSpeak.NLP;
+IReadOnlyList<Phrase> phrases = TextParser.Parse("Beep boop! System is ready.");
+Span<float> buffer = new float[synth.GetSampleCount(phrases)];
+int written = synth.Synthesize(phrases, buffer); // no allocations on the warm path
+```
+
+### Custom voice profiles
+
+```csharp
+using DroidSpeak;
+using DroidSpeak.DSP;
+
+var grumpy = new DroidSynthesizer(seed: 1, profile: DroidVoiceProfile.Grumpy);
+float[] a = grumpy.Synthesize("I really don't want to do this...");
+
+var custom = DroidVoiceProfile.R2 with { MaxFreq = 2000f, PitchCurve = 0.7f };
+string json = custom.ToJson();                       // NativeAOT-safe round trip
+DroidVoiceProfile loaded = DroidVoiceProfile.FromJson(json);
+```
+
+Four presets ship built in: `R2`, `Grumpy`, `Bass`, `Tiny`. See
+[DSP & Voice Profiles](https://github.com/HC-NC/DroidSpeak/blob/main/docs/dsp-and-voices.md) for the
+full parameter list and the v0.5 formant / ring-mod / saturation / room / pitch-curve layer.
+
+### Neural prosody (optional)
+
+A trained `.dsbrain` model can replace the rule engine with one call. No model is embedded in the
+library; the classic rule-based voice stays the default.
+
+```csharp
+using DroidSpeak.DSP;
+
+var neural = DroidSynthesizer.FromBrainFile("r2-neural.dsbrain", profile: DroidVoiceProfile.R2);
+float[] pcm = neural.Synthesize("Beep boop! Neural prosody online.");
+
+// or from bytes you fetched/embedded
+var other = DroidSynthesizer.FromBrainBytes(bytes, seed: 0);
+```
+
+Train your own with the `DroidSpeak.Trainer` CLI — see
+[Neural Prosody Training](https://github.com/HC-NC/DroidSpeak/blob/main/docs/neural-training.md) for
+the MLP architecture, `.dsbrain`/`.dsdata` formats, and the `distill` → `extract` → `finetune`
+workflow.
+
+### Acoustic modem
+
+```csharp
+using DroidSpeak.DSP;
+using DroidSpeak.Modem;
+
+var synth = new DroidSynthesizer(seed: 1);
+float[] speech = synth.Synthesize("Move along, nothing to see here.");
+
+float[] mixed = DroidModemEncoder.EncodeIntoSpeech(
+    "Secret coordinates: 42.19", speech, ModemMode.HighBandOverlay, synth.SampleRate);
+
+if (DroidModemDecoder.TryDecode(mixed, synth.SampleRate, out var result))
+    Console.WriteLine($"{result.Text} · CRC OK · {result.ClockDriftPpm:+0;-0;0} ppm");
+```
+
+`HighBandOverlay` adds tones at 14.6–17 kHz without touching the voice; `AudibleChirpStream` uses
+2.3–4.3 kHz chirps for narrowband channels. Hamming(7,4) FEC, CRC-16, timing pilots, clock-drift
+tracking and streaming capture are covered in
+[Acoustic Modem](https://github.com/HC-NC/DroidSpeak/blob/main/docs/acoustic-modem.md).
+
+## Web playground & drop-in brains
+
+The interactive playground runs entirely in the browser (Blazor WebAssembly) at
+**[hc-nc.github.io/DroidSpeak](https://hc-nc.github.io/DroidSpeak/)**.
+
+### Neural prosody in the playground
+
+- A **Prosody Engine / Brain** dropdown lists `Rule-Based (Classic)` plus every model named in
+  `DroidSpeak.Web/wwwroot/brains/manifest.json`.
+- To host a model with no recompile: drop `my-voice.dsbrain` into `wwwroot/brains/` and add its file
+  name to the manifest (a JSON array of bare file names):
+
+  ```json
+  [ "r2-neural.dsbrain" ]
+  ```
+
+  `.dsbrain` files are git-ignored; the manifest is tracked and ships as `[]` by default.
+- **Load .dsbrain File** lets any visitor use a local model entirely client-side.
+- Missing or malformed manifests and failed loads fall back to `Rule-Based (Classic)`.
+
+> On a static host, publish both the model file and the updated `manifest.json` to the served
+> `brains/` directory. No C# rebuild is needed, but GitHub Pages still requires a deployment.
+
+## CLI tools
+
+`DroidSpeak.Demo` and `DroidSpeak.Trainer` are also available as self-contained single-file binaries
+for `win-x64`, `linux-x64` and `osx-arm64` from the
+**[latest GitHub Release](https://github.com/HC-NC/DroidSpeak/releases/latest)** — no .NET runtime
+install required.
+
+```bash
+# Interactive REPL with live playback
+./DroidSpeak.Demo
+
+# One-shot synthesis, MIDI, and export
+./DroidSpeak.Demo "Hello there! Systems online." -v r2
+./DroidSpeak.Demo -m melody.mid --solo -v r2
+./DroidSpeak.Demo "ALERT! Reactor overheating!" -o alert.wav --no-play
+./DroidSpeak.Demo "Neural voice" --brain r2-neural.dsbrain -o neural.wav --no-play
+
+# Offline prosody training
+./DroidSpeak.Trainer distill --samples 8000 --profile r2 --out r2-base.dsbrain
+./DroidSpeak.Trainer eval --brain r2-base.dsbrain --samples 1500
+```
+
+REPL commands: `/voice`, `/voice json|save <file>`, `/brain [file|off]`, `/music [--solo] <file>`,
+`/transmit [--mode high|audible] <text>`, `/demo`, `/save <file.wav>`, `/help`, `/exit`.
+
+From source: `dotnet run --project DroidSpeak.Demo` / `dotnet run --project DroidSpeak.Trainer -- <command>`.
+
+> `DroidSpeak.Demo` uses **SoundFlow** for cross-platform playback. `DroidSpeak.Core` itself has zero
+> third-party packages.
+
+## Documentation
+
+| Guide | Contents |
+| :--- | :--- |
+| [Architecture](https://github.com/HC-NC/DroidSpeak/blob/main/docs/architecture.md) | Pipeline stages, `IProsodyPredictor`, `SyllableFrame`, zero-allocation guarantees, determinism |
+| [DSP & Voice Profiles](https://github.com/HC-NC/DroidSpeak/blob/main/docs/dsp-and-voices.md) | Carrier/FM/envelope chain, v0.5 expressive layer, presets, JSON profiles, music, streaming |
+| [Neural Prosody Training](https://github.com/HC-NC/DroidSpeak/blob/main/docs/neural-training.md) | MLP architecture, `.dsbrain`/`.dsdata` formats, `distill` → `extract` → `finetune` |
+| [Acoustic Modem](https://github.com/HC-NC/DroidSpeak/blob/main/docs/acoustic-modem.md) | Modem modes, Hamming(7,4) FEC, CRC-16, pilots, streaming capture, legacy decode |
+
+## How typography shapes speech
+
+| Input | Acoustic Effect |
+| :--- | :--- |
+| **`!`** | Boosts `Arousal`: louder output, faster tempo, wider pitch leaps, stronger FM |
+| **`?`** | Rising pitch glissando across the final two syllables |
+| **`...`** | Slower tempo, lower pitch and `Arousal`, downward cadence |
+| **`ALL CAPS`** | Local FM overdrive, soft clipping, and elevated pitch (shouting/alarm) |
+| **Syllables in a word** | Legato glide with continuous phase; ADSR attack on first, release on last |
+| **Fricatives (`s, sh, ch, f`)** | Short white-noise burst on syllable attack |
+| **Voiced (`b, d, g, r, z`)** | Low-frequency AM/FM modulation ("growl") |
+
+## Audio demos
 
 <details>
 <summary>🔊 <b>1. Expressive Astromech (<code>R2</code>)</b> — <i>Emotion shifts, trills & legato glides</i></summary>
@@ -58,290 +209,36 @@ https://github.com/user-attachments/assets/fe18eafe-f8b1-4112-b45c-e7d553d30709
 
 </details>
 
----
-
-## Project Structure
+## Project structure
 
 ```text
 DroidSpeak.sln
 ├── DroidSpeak.Core        # Core library (zero dependencies)
-│   ├── DroidVoiceProfile.cs
 │   ├── NLP/               # Text, syllable, and emotion analysis
-│   ├── Prosody/           # SyllableContext -> SyllableFrame prediction (IProsodyPredictor)
-│   ├── DSP/               # FM synthesizer, chatter generator, WAV writer
-│   ├── Music/             # MIDI & RTTTL parsers, polyphonic droid music synthesizer
-│   └── Modem/             # Rich-spectrum 4-FSK encoder/decoder, FEC, streaming receiver
+│   ├── Prosody/           # SyllableContext -> SyllableFrame (IProsodyPredictor)
+│   ├── Neural/            # MLP inference, .dsbrain format, NeuralProsodyPredictor
+│   ├── DSP/               # FM synthesizer, chatter, streaming, WAV writer
+│   ├── Music/             # MIDI & RTTTL parsers, polyphonic droid music
+│   └── Modem/             # 4-FSK encoder/decoder, FEC, CRC, streaming receiver
+├── DroidSpeak.Trainer     # Offline distillation / extraction / fine-tuning CLI
 ├── DroidSpeak.Demo        # Interactive CLI/REPL with live playback (SoundFlow)
 ├── DroidSpeak.Web         # Interactive Blazor WebAssembly playground (GitHub Pages)
-└── DroidSpeak.Tests       # xUnit test suite
+└── DroidSpeak.Tests       # xUnit suite incl. acoustic fingerprint regression tests
 ```
 
----
-
-## Quick Start
-
-### Build & Test
+## Build & test
 
 ```bash
-dotnet build
-dotnet test
+dotnet build DroidSpeak.sln -c Release
+dotnet test  DroidSpeak.sln -c Release
 ```
 
-### Run the Interactive CLI / REPL
-
-```bash
-# Start interactive REPL mode
-dotnet run --project DroidSpeak.Demo
-
-# Synthesize and play a single phrase with a chosen voice profile
-dotnet run --project DroidSpeak.Demo -- "Hello there! Systems online." -v r2
-
-# Play a Standard MIDI file in solo lead-whistle mode
-dotnet run --project DroidSpeak.Demo -- -m melody.mid --solo -v r2
-
-# Export speech or music to a 16-bit PCM WAV file without playback
-dotnet run --project DroidSpeak.Demo -- "ALERT! Reactor overheating!" -o alert.wav --no-play
-```
-
-#### REPL Commands
-
-| Command | Description |
-| :--- | :--- |
-| `<text>` | Synthesize and play text, displaying `(Valence, Arousal)` and duration |
-| `/voice [r2\|grumpy\|bass\|tiny]` | Show or switch the active droid voice profile |
-| `/voice json <file.json>` | Load a custom voice profile from JSON |
-| `/voice save <file.json>` | Save the current voice profile to JSON |
-| `/music [--solo] <file.mid\|rtttl>` | Play a MIDI file or RTTTL ringtone using the active voice (press any key to stop) |
-| `/transmit [--mode high\|audible] <text>` | Embed UTF-8 text without filtering the voice, save `transmit.wav`, and report FEC/CRC diagnostics |
-| `/demo` | Play four built-in emotional test phrases |
-| `/save <file.wav>` | Save the last synthesized utterance or melody to a WAV file |
-| `/help` | Show available commands |
-| `/exit` | Quit the REPL |
-
-> **Note:** `DroidSpeak.Demo` uses **SoundFlow** for cross-platform live audio playback (with instant keypress interruption). `DroidSpeak.Core` itself has zero third-party packages.
-
----
-
-## Usage
-
-### Basic Synthesis & WAV Export
-
-```csharp
-using DroidSpeak.DSP;
-
-var synthesizer = new DroidSynthesizer(sampleRate: 44100, seed: 0);
-float[] samples = synthesizer.Synthesize("Beep boop! System is ready.");
-
-WavWriter.Write("greeting.wav", samples, synthesizer.SampleRate);
-```
-
-### Zero-Allocation Buffer Rendering
-
-```csharp
-int requiredSamples = synthesizer.GetSampleCount(text);
-Span<float> buffer = new float[requiredSamples];
-int written = synthesizer.Synthesize(text, buffer);
-```
-
-Parsing text allocates, but the prosody and DSP pipeline does not. Once you reuse already parsed
-phrases, both `GetSampleCount` and the `Span<float>` overload run allocation-free on the warm path:
-
-```csharp
-using DroidSpeak.NLP;
-
-IReadOnlyList<Phrase> phrases = TextParser.Parse("Beep boop! System is ready.");
-Span<float> buffer = new float[synthesizer.GetSampleCount(phrases)];
-int written = synthesizer.Synthesize(phrases, buffer); // 0 bytes allocated
-```
-
-### Custom Prosody (`DroidSpeak.Prosody`)
-
-Prosody and rendering are separate stages. An `IProsodyPredictor` reads flat `SyllableContext`
-values and writes one `SyllableFrame` per syllable; the DSP renderer consumes only frames.
-
-```csharp
-using DroidSpeak.Prosody;
-
-public sealed class WhisperPredictor : IProsodyPredictor
-{
-    public void Predict(
-        ReadOnlySpan<SyllableContext> contexts,
-        Span<SyllableFrame> frames,
-        DroidVoiceProfile profile)
-    {
-        for (var i = 0; i < contexts.Length; i++)
-        {
-            var start = i * 4000;
-            frames[i] = new SyllableFrame
-            {
-                StartSample = start,
-                LengthSamples = 4000,
-                StartFreq = 400f,
-                EndFreq = 380f,
-                StartGain = 0.15f,
-                Gain = 0.12f,
-                FmRatio = 2f,
-                FmRatio2 = 3.07f,
-                AttackTime = 0.02f,
-                DecayTime = 0.03f,
-                ReleaseTime = 0.02f,
-                SustainLevel = 0.6f,
-                WordStartSample = start,
-                WordEndSample = start + 4000,
-                StartsLegatoSegment = true,
-            };
-        }
-    }
-}
-
-var whisper = new DroidSynthesizer(predictor: new WhisperPredictor());
-```
-
-`RuleBasedProsodyPredictor` stays the default and produces byte-identical output to v0.3.0 for the
-same text, seed and profile on a given platform. `SyllableFrame` also carries `MidFreq`,
-`RingModMix` and `Formant*` fields for the v0.5 expressive layer; the renderer consumes them when
-the active voice profile enables the corresponding parameters and leaves the v0.4 path untouched
-otherwise.
-
-### Voice Profiles (Code & JSON)
-
-```csharp
-using DroidSpeak;
-using DroidSpeak.DSP;
-
-var grumpy = new DroidSynthesizer(seed: 1, profile: DroidVoiceProfile.Grumpy);
-float[] complaint = grumpy.Synthesize("I really don't want to do this...");
-
-// Override voice profile for a single utterance
-float[] chirp = grumpy.Synthesize("Whoa!", DroidVoiceProfile.Tiny);
-
-// Serialize / deserialize custom profiles (NativeAOT-safe)
-string json = DroidVoiceProfile.Tiny.ToJson();
-DroidVoiceProfile loaded = DroidVoiceProfile.FromJson(json);
-```
-
-| Preset | `MinFreq` (Hz) | `MaxFreq` (Hz) | `SpeedMultiplier` | `FmIntensity` | `ChatterProbability` | `TriangleMix` |
-| :--- | :---: | :---: | :---: | :---: | :---: | :---: |
-| **`R2`** | 350 | 1600 | 1.00 | 1.00 | 0.50 | 0.23 |
-| **`Grumpy`** | 220 | 1100 | 0.92 | 1.45 | 0.34 | 0.36 |
-| **`Bass`** | 120 | 650 | 0.82 | 1.20 | 0.26 | 0.30 |
-| **`Tiny`** | 600 | 2400 | 1.38 | 1.10 | 0.78 | 0.16 |
-
-The word-level ADSR envelope, the dynamic resonant low-pass filter and the whistle intensity are
-profile-driven too. Documents written by older versions that omit these fields keep the defaults:
-
-| Parameter | Default | Range | Effect |
-| :--- | :---: | :---: | :--- |
-| `AttackSeconds` | 0.010 | 0.002–0.100 | Word-level ADSR attack |
-| `DecaySeconds` | 0.022 | 0.005–0.150 | Word-level ADSR decay |
-| `SustainLevel` | 0.74 | 0.10–1.00 | Word-level sustain gain |
-| `ReleaseSeconds` | 0.016 | 0.005–0.200 | Word-level ADSR release |
-| `FilterCutoffMultiplier` | 1.65 | 0.80–4.00 | Base cutoff relative to `MaxFreq` |
-| `FilterResonance` | 1.45 | 0.50–4.00 | Q of the resonant low-pass |
-| `WhistleProbability` | 1.00 | 0.00–1.50 | Whistle chance multiplier (`0` disables whistles) |
-
-### v0.5 Rich DSP & Vocal Formants
-
-v0.5.0 adds five expressive parameters. All of them default to `0`, which keeps a hand-built
-profile (and any JSON written by older versions) reproducing the v0.4 renderer exactly — bit-for
-bit on a given platform; the shipped presets enable them:
-
-| Parameter | Default | Range | Effect | `R2` | `Grumpy` | `Bass` | `Tiny` |
-| :--- | :---: | :---: | :--- | :---: | :---: | :---: | :---: |
-| `FormantMix` | 0.00 | 0.00–1.00 | Parallel vowel formant bank driven by the syllable nucleus | 0.55 | 0.50 | 0.42 | 0.62 |
-| `RingModMix` | 0.00 | 0.00–1.00 | Inharmonic ring modulation for metallic sidebands | 0.14 | 0.42 | 0.10 | 0.26 |
-| `SaturationDrive` | 0.00 | 0.00–4.00 | Analog soft-clipping drive before the resonant low-pass | 0.55 | 1.60 | 2.20 | 0.35 |
-| `RoomMix` | 0.00 | 0.00–1.00 | Early-reflection (7 ms / 13 ms taps) ambience send | 0.18 | 0.26 | 0.32 | 0.10 |
-| `PitchCurve` | 0.00 | 0.00–1.00 | Three-point pitch arcs and energy-driven attack chirps | 0.45 | 0.30 | 0.18 | 0.85 |
-
-The `RuleBasedProsodyPredictor` scales the per-syllable formant mix, ring depth and chirp
-strength by vowel presence, onset type, stress, shout and phrase emotion, and maps Latin and
-Cyrillic vowels to their first two formants, so the expressive layer follows the text instead of
-coloring every syllable the same way.
-
-Preset highlights: `Grumpy` uses a lower cutoff with a stronger resonant peak, `Bass` has a slower
-attack and a longer release, and `Tiny` has snappier envelopes plus extra whistles. If a word is
-too short to fit the requested attack, decay and release, the envelope is scaled down
-proportionally.
-
-### Music & Melodies (`DroidSpeak.Music`)
-
-Render Standard MIDI files (`.mid`) or RTTTL ringtone strings using any droid voice profile:
-
-```csharp
-using DroidSpeak;
-using DroidSpeak.DSP;
-using DroidSpeak.Music;
-
-var musicSynth = new DroidMusicSynthesizer(profile: DroidVoiceProfile.R2);
-
-// Parse and render an RTTTL ringtone
-DroidScore joy = RtttlParser.Shared.Parse(
-    "OdeToJoy:d=4,o=5,b=125:e,e,f,g,g,f,e,d,c,c,d,e,e.,8d,2d");
-float[] joySamples = musicSynth.Render(joy);
-WavWriter.Write("joy.wav", joySamples, musicSynth.SampleRate);
-
-// Load a Standard MIDI file (.mid) and render only the upper lead melody in solo droid whistle mode
-DroidScore midiScore = MidiParser.Shared.Load("melody.mid");
-float[] soloSamples = musicSynth.Render(midiScore, DroidVoiceProfile.R2, soloMelodyOnly: true);
-```
-
-Custom musical notations can also be plugged in by implementing `IScoreParser` or `ITextScoreParser`.
-
-### Rich-Spectrum Acoustic Modem (`DroidSpeak.Modem`)
-
-Send up to **255 bytes** of UTF-8 without cutting the voice. `HighBandOverlay` leaves the full audible band untouched and adds shaped 4-FSK tones at **14.6–17 kHz**; `AudibleChirpStream` uses **2.3–4.3 kHz** chirps in a natural pause or after the utterance.
-
-```csharp
-using DroidSpeak.DSP;
-using DroidSpeak.Modem;
-
-var synthesizer = new DroidSynthesizer(seed: 1);
-float[] speech = synthesizer.Synthesize("Move along, nothing to see here.");
-
-// Full-spectrum voice preservation (default for rich audio)
-float[] mixed = DroidModemEncoder.EncodeIntoSpeech(
-    "Secret coordinates: 42.19",
-    speech,
-    ModemMode.HighBandOverlay,
-    synthesizer.SampleRate);
-WavWriter.Write("transmit.wav", mixed, synthesizer.SampleRate);
-
-// Decode one-shot, with FEC / CRC / clock diagnostics
-if (DroidModemDecoder.TryDecode(mixed, synthesizer.SampleRate, out var result))
-{
-    Console.WriteLine($"{result.Text} · FEC={result.CorrectedBits} · {result.ClockDriftPpm:+0;-0;0} ppm");
-}
-
-// Or decode a live microphone stream chunk by chunk
-var receiver = new StreamingAcousticDemodulator(synthesizer.SampleRate);
-receiver.Feed(micChunk);
-if (receiver.TryReadPacket(out var live))
-{
-    Console.WriteLine(live.Text);
-}
-```
-
-> The high-band mode is preserved by 44.1/48 kHz audio hardware but is not guaranteed through codecs or speakers that low-pass below ~18 kHz. Use `AudibleChirpStream` for narrowband channels.
-
----
-
-## How Typography Shapes Speech
-
-| Input | Acoustic Effect |
-| :--- | :--- |
-| **`!`** | Boosts `Arousal`: louder output, faster tempo, wider pitch leaps, stronger FM |
-| **`?`** | Rising pitch glissando across the final two syllables |
-| **`...`** | Slower tempo, lower pitch and `Arousal`, downward cadence |
-| **`ALL CAPS`** | Local FM overdrive, soft clipping, and elevated pitch (shouting/alarm) |
-| **Syllables in a word** | Legato glide with continuous phase; ADSR attack on first syllable, release on last |
-| **Fricatives (`s, sh, ch, f`)** | Short white-noise burst on syllable attack |
-| **Voiced (`b, d, g, r, z`)** | Low-frequency AM/FM modulation ("growl") |
-
----
-
-## License & Disclaimer
+## License & disclaimer
 
 This project is licensed under the **MIT License** — see the [LICENSE](LICENSE) file for details.
 
-**Disclaimer:** This is an independent, non-commercial fan-made open-source project. All audio is procedurally synthesized from scratch using mathematical DSP algorithms without any copyrighted audio samples. *Star Wars*, *R2-D2*, and related names are trademarks of Lucasfilm Ltd. / The Walt Disney Company. This project is not affiliated with, endorsed by, or sponsored by Lucasfilm Ltd. or The Walt Disney Company.
+**Disclaimer:** This is an independent, non-commercial fan-made open-source project. All audio is
+procedurally synthesized from scratch using mathematical DSP algorithms without any copyrighted
+audio samples. *Star Wars*, *R2-D2*, and related names are trademarks of Lucasfilm Ltd. / The Walt
+Disney Company. This project is not affiliated with, endorsed by, or sponsored by Lucasfilm Ltd. or
+The Walt Disney Company.

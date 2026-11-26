@@ -9,8 +9,17 @@ namespace DroidSpeak.Music
     /// </summary>
     public sealed class RtttlParser : ITextScoreParser
     {
+        /// <summary>Shared stateless instance, the intended entry point.</summary>
         public static RtttlParser Shared { get; } = new();
 
+        /// <summary>
+        /// Parses an RTTTL string of the form <c>Name:d=X,o=Y,b=Z:notes</c> into a <see cref="DroidScore"/>.
+        /// </summary>
+        /// <param name="text">The ringtone notation, including its defaults section.</param>
+        /// <exception cref="ArgumentException"><paramref name="text"/> is null or whitespace.</exception>
+        /// <exception cref="FormatException">
+        /// The text does not have the three <c>Name:Defaults:Notes</c> sections, or a note token is invalid.
+        /// </exception>
         public DroidScore Parse(string text)
         {
             ArgumentException.ThrowIfNullOrWhiteSpace(text);
