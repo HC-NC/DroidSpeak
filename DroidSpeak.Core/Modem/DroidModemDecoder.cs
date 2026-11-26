@@ -16,12 +16,53 @@ public static class DroidModemDecoder
     private const float BandHigh = 4800f;
 
     /// <summary>
-    /// Attempts to recover a text packet from <paramref name="samples"/>.
+    /// Attempts to recover a text packet from <paramref name="samples"/>. The v0.9 modes are
+    /// tried first, then the legacy v0.8 binary-FSK format for older recordings.
     /// </summary>
     /// <param name="samples">Mono audio, either clean modem tones or droid speech with a hidden packet.</param>
     /// <param name="sampleRate">Sample rate in Hz (at least 10000).</param>
     /// <returns>The decoded text, or <see langword="null"/> when no valid packet was found.</returns>
-    public static string? Decode(ReadOnlySpan<float> samples, int sampleRate = 44100)
+    public static string? Decode(ReadOnlySpan<float> samples, int sampleRate = 44100) =>
+        TryDecode(samples, sampleRate, out var result) ? result.Text : null;
+
+    /// <summary>
+    /// Attempts to recover a v0.9 packet and returns FEC, CRC, and clock diagnostics.
+    /// </summary>
+    public static bool TryDecode(
+        ReadOnlySpan<float> samples,
+        int sampleRate,
+        out ModemDecodeResult result)
+    {
+        if (AcousticDemodulator.TryDecode(samples, sampleRate, out result))
+        {
+            return true;
+        }
+
+        var legacy = DecodeLegacy(samples, sampleRate);
+        if (legacy is null)
+        {
+            result = default;
+            return false;
+        }
+
+        result = new ModemDecodeResult(
+            legacy,
+            ModemMode.HighBandOverlay,
+            CorrectedBits: 0,
+            CrcValid: true,
+            ClockDriftPpm: 0,
+            SamplesConsumed: samples.Length,
+            Legacy: true);
+        return true;
+    }
+
+    /// <summary>
+    /// Attempts to recover a packet from one specific v0.9 mode.
+    /// </summary>
+    public static string? Decode(ReadOnlySpan<float> samples, int sampleRate, ModemMode mode) =>
+        AcousticDemodulator.TryDecode(samples, sampleRate, mode, out var result) ? result.Text : null;
+
+    private static string? DecodeLegacy(ReadOnlySpan<float> samples, int sampleRate = 44100)
     {
         if (sampleRate < DroidModemProtocol.MinimumSampleRate || sampleRate > 192000)
         {

@@ -46,6 +46,18 @@ internal static class AcousticFrameProtocol
         return bits.ToArray();
     }
 
+    public static int[] BuildPreambleSymbols()
+    {
+        var bits = BuildPreambleBits();
+        var symbols = new int[bits.Length / 2];
+        for (var i = 0; i < symbols.Length; i++)
+        {
+            symbols[i] = (bits[i * 2] << 1) | bits[i * 2 + 1];
+        }
+
+        return symbols;
+    }
+
     public static byte[] BuildFrame(string text, ModemMode mode)
     {
         ArgumentNullException.ThrowIfNull(text);
